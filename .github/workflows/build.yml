@@ -6,6 +6,15 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      FullRelease:
+        description: "Publish the current latest version as a full release"
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -25,6 +34,38 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Resolve release version
+      id: version
+      run: |
+        git fetch --tags --force
+        latest_tag=$(git tag --sort=-v:refname | head -n 1)
+        latest_tag=${latest_tag#v}
+
+        if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ inputs.FullRelease }}" = "true" ]; then
+          version="$latest_tag"
+          is_prerelease="false"
+        else
+          IFS='.' read -r -a parts <<< "$latest_tag"
+          last_index=$((${#parts[@]} - 1))
+          parts[$last_index]=$((parts[$last_index] + 1))
+          version=$(IFS='.'; echo "${parts[*]}")
+          is_prerelease="true"
+        fi
+
+        echo "version=${version}" >> "$GITHUB_OUTPUT"
+        echo "is_prerelease=${is_prerelease}" >> "$GITHUB_OUTPUT"
+
+    - name: Create release tag
+      if: github.event_name != 'pull_request' && steps.version.outputs.is_prerelease == 'true'
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git tag "${{ steps.version.outputs.version }}"
+        git push origin "refs/tags/${{ steps.version.outputs.version }}"
+
     - name: Set up JDK 21
       uses: actions/setup-java@v4
       with:
@@ -51,7 +92,11 @@ jobs:
     - name: Assemble release directory
       run: |
         mkdir release
-        cp target/GhidraMCP-*-SNAPSHOT.zip release/
+        if [ "${{ steps.version.outputs.is_prerelease }}" = "true" ]; then
+          cp target/GhidraMCP-*-SNAPSHOT.zip "release/GhidraMCP-${{ steps.version.outputs.version }}-SNAPSHOT.zip"
+        else
+          cp target/GhidraMCP-*-SNAPSHOT.zip "release/GhidraMCP-${{ steps.version.outputs.version }}.zip"
+        fi
         cp bridge_mcp_ghidra.py release/
 
     - name: Upload artifact
@@ -60,3 +105,16 @@ jobs:
         name: GhidraMCP-artifact
         path: |
           release/*
+
+    - name: Publish GitHub release
+      if: github.event_name != 'pull_request'
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ steps.version.outputs.version }}
+        name: GhidraMCP ${{ steps.version.outputs.version }}
+        files: |
+          ${{ steps.version.outputs.is_prerelease == 'true' && format('release/GhidraMCP-{0}-SNAPSHOT.zip', steps.version.outputs.version) || format('release/GhidraMCP-{0}.zip', steps.version.outputs.version) }}
+          release/bridge_mcp_ghidra.py
+        prerelease: ${{ steps.version.outputs.is_prerelease }}
+        generate_release_notes: true
+        overwrite_files: true
