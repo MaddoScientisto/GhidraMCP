@@ -68,6 +68,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -146,8 +147,13 @@ public class GhidraMCPPlugin extends Plugin {
 
         server.createContext("/renameData", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
-            renameDataAtAddress(params.get("address"), params.get("newName"));
-            sendResponse(exchange, "Rename data attempted");
+            sendResponse(exchange, renameDataAtAddress(params.get("address"), params.get("newName")));
+        });
+
+        server.createContext("/get_symbol_at", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
         });
 
         server.createContext("/renameVariable", exchange -> {
@@ -701,38 +707,109 @@ public class GhidraMCPPlugin extends Plugin {
         return successFlag.get();
     }
 
-    private void renameDataAtAddress(String addressStr, String newName) {
+    private String renameDataAtAddress(String addressStr, String newName) {
         Program program = getCurrentProgram();
-        if (program == null) return;
+        if (program == null) return "failed: rename_data no program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "failed: rename_data address is required";
+        if (newName == null || newName.isBlank()) return "failed: rename_data new_name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        AtomicReference<String> result = new AtomicReference<>("failed: rename_data unknown error");
 
         try {
             SwingUtilities.invokeAndWait(() -> {
                 int tx = program.startTransaction("Rename data");
                 try {
                     Address addr = program.getAddressFactory().getAddress(addressStr);
-                    Listing listing = program.getListing();
-                    Data data = listing.getDefinedDataAt(addr);
-                    if (data != null) {
-                        SymbolTable symTable = program.getSymbolTable();
-                        Symbol symbol = symTable.getPrimarySymbol(addr);
-                        if (symbol != null) {
-                            symbol.setName(newName, SourceType.USER_DEFINED);
-                        } else {
-                            symTable.createLabel(addr, newName, SourceType.USER_DEFINED);
-                        }
+                    if (addr == null) {
+                        result.set("failed: rename_data invalid address=" + safeValueForResponse(addressStr));
+                        return;
+                    }
+
+                    SymbolTable symTable = program.getSymbolTable();
+                    Symbol symbol = symTable.getPrimarySymbol(addr);
+                    String previousName = symbol != null ? symbol.getName() : "";
+
+                    if (symbol != null) {
+                        symbol.setName(newName, SourceType.USER_DEFINED);
+                    } else {
+                        symTable.createLabel(addr, newName, SourceType.USER_DEFINED);
+                    }
+
+                    Symbol resolved = symTable.getPrimarySymbol(addr);
+                    boolean hasDefinedData = program.getListing().getDefinedDataAt(addr) != null;
+                    if (resolved != null && newName.equals(resolved.getName())) {
+                        success.set(true);
+                        result.set(
+                            "ok: rename_data address=" + safeValueForResponse(addr.toString()) +
+                            " new_name=" + safeValueForResponse(newName) +
+                            " resolved_symbol=" + safeValueForResponse(resolved.getName()) +
+                            " source=" + safeValueForResponse(resolved.getSource().toString()) +
+                            " symbol_type=" + safeValueForResponse(resolved.getSymbolType().toString()) +
+                            " defined_data=" + hasDefinedData +
+                            (previousName.isBlank() || previousName.equals(newName)
+                                ? ""
+                                : " previous_name=" + safeValueForResponse(previousName))
+                        );
+                    } else {
+                        result.set(
+                            "failed: rename_data address=" + safeValueForResponse(addr.toString()) +
+                            " requested_name=" + safeValueForResponse(newName) +
+                            " resolved_symbol=" + safeValueForResponse(resolved != null ? resolved.getName() : "<none>") +
+                            " defined_data=" + hasDefinedData
+                        );
                     }
                 }
                 catch (Exception e) {
                     Msg.error(this, "Rename data error", e);
+                    result.set(
+                        "failed: rename_data address=" + safeValueForResponse(addressStr) +
+                        " new_name=" + safeValueForResponse(newName) +
+                        " error=" + safeValueForResponse(e.getMessage())
+                    );
                 }
                 finally {
-                    program.endTransaction(tx, true);
+                    boolean committed = program.endTransaction(tx, success.get());
+                    if (!committed && result.get().startsWith("ok:")) {
+                        result.set(
+                            "failed: rename_data address=" + safeValueForResponse(addressStr) +
+                            " new_name=" + safeValueForResponse(newName) +
+                            " error=transaction did not commit"
+                        );
+                    }
                 }
             });
         }
         catch (InterruptedException | InvocationTargetException e) {
             Msg.error(this, "Failed to execute rename data on Swing thread", e);
+            return "failed: rename_data address=" + safeValueForResponse(addressStr) +
+                " new_name=" + safeValueForResponse(newName) +
+                " error=" + safeValueForResponse(e.getMessage());
         }
+
+        return result.get();
+    }
+
+    private String getSymbolAt(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "failed: get_symbol_at no program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "failed: get_symbol_at address is required";
+
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        if (addr == null) return "failed: get_symbol_at invalid address=" + safeValueForResponse(addressStr);
+
+        Symbol symbol = program.getSymbolTable().getPrimarySymbol(addr);
+        boolean hasDefinedData = program.getListing().getDefinedDataAt(addr) != null;
+        if (symbol == null) {
+            return "ok: get_symbol_at address=" + safeValueForResponse(addr.toString()) +
+                " symbol=<none> defined_data=" + hasDefinedData;
+        }
+
+        return "ok: get_symbol_at address=" + safeValueForResponse(addr.toString()) +
+            " symbol=" + safeValueForResponse(symbol.getName()) +
+            " source=" + safeValueForResponse(symbol.getSource().toString()) +
+            " symbol_type=" + safeValueForResponse(symbol.getSymbolType().toString()) +
+            " defined_data=" + hasDefinedData;
     }
 
     private String renameVariableInFunction(String functionName, String oldVarName, String newVarName) {

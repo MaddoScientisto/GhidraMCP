@@ -189,9 +189,20 @@ def rename_function(old_name: str, new_name: str) -> str:
 @mcp.tool()
 def rename_data(address: str, new_name: str) -> str:
     """
-    Rename a data label at the specified address.
+    Rename or create the primary symbol at the specified address.
     """
-    return safe_post("renameData", {"address": address, "newName": new_name})
+    result = safe_post("renameData", {"address": address, "newName": new_name})
+    return (
+        f"Rename data at {address} -> {new_name}\n"
+        f"{result}"
+    )
+
+@mcp.tool()
+def get_symbol_at(address: str) -> str:
+    """
+    Get the current primary symbol state at an address.
+    """
+    return "\n".join(safe_get("get_symbol_at", {"address": address}))
 
 @mcp.tool()
 def list_segments(offset: int = 0, limit: int = 100) -> list:
