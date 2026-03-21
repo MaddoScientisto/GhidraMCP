@@ -49,8 +49,12 @@ jobs:
           is_prerelease="false"
         else
           IFS='.' read -r -a parts <<< "$latest_tag"
-          last_index=$((${#parts[@]} - 1))
-          parts[$last_index]=$((parts[$last_index] + 1))
+          if [ ${#parts[@]} -lt 3 ]; then
+            parts+=(1)
+          else
+            last_index=$((${#parts[@]} - 1))
+            parts[$last_index]=$((parts[$last_index] + 1))
+          fi
           version=$(IFS='.'; echo "${parts[*]}")
           is_prerelease="true"
         fi
@@ -89,22 +93,23 @@ jobs:
     - name: Build with Maven
       run: mvn clean package assembly:single
 
-    - name: Assemble release directory
+    - name: Assemble release bundle
       run: |
-        mkdir release
+        mkdir -p release
+        release_prefix=""
         if [ "${{ steps.version.outputs.is_prerelease }}" = "true" ]; then
-          cp target/GhidraMCP-*-SNAPSHOT.zip "release/GhidraMCP-${{ steps.version.outputs.version }}-SNAPSHOT.zip"
+          release_prefix="pre"
         else
-          cp target/GhidraMCP-*-SNAPSHOT.zip "release/GhidraMCP-${{ steps.version.outputs.version }}.zip"
+          release_prefix=""
         fi
-        cp bridge_mcp_ghidra.py release/
+        bundle_name="GhidraMCP-${release_prefix}release-${{ steps.version.outputs.version }}.zip"
+        zip -j "release/${bundle_name}" target/GhidraMCP-*-SNAPSHOT.zip bridge_mcp_ghidra.py
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: GhidraMCP-artifact
-        path: |
-          release/*
+        name: GhidraMCP-${{ steps.version.outputs.is_prerelease == 'true' && 'prerelease' || 'release' }}-${{ steps.version.outputs.version }}
+        path: release/GhidraMCP-${{ steps.version.outputs.is_prerelease == 'true' && 'prerelease' || 'release' }}-${{ steps.version.outputs.version }}.zip
 
     - name: Publish GitHub release
       if: github.event_name != 'pull_request'
@@ -113,8 +118,7 @@ jobs:
         tag_name: ${{ steps.version.outputs.version }}
         name: GhidraMCP ${{ steps.version.outputs.version }}
         files: |
-          ${{ steps.version.outputs.is_prerelease == 'true' && format('release/GhidraMCP-{0}-SNAPSHOT.zip', steps.version.outputs.version) || format('release/GhidraMCP-{0}.zip', steps.version.outputs.version) }}
-          release/bridge_mcp_ghidra.py
+          release/GhidraMCP-${{ steps.version.outputs.is_prerelease == 'true' && 'prerelease' || 'release' }}-${{ steps.version.outputs.version }}.zip
         prerelease: ${{ steps.version.outputs.is_prerelease }}
         generate_release_notes: true
         overwrite_files: true
