@@ -3,9 +3,12 @@ package com.lauriewired;
 import ghidra.framework.plugintool.Plugin;
 import ghidra.framework.plugintool.PluginTool;
 import ghidra.program.model.address.Address;
+import ghidra.program.model.address.AddressSet;
 import ghidra.program.model.address.GlobalNamespace;
 import ghidra.program.model.listing.*;
+import ghidra.program.model.mem.Memory;
 import ghidra.program.model.mem.MemoryBlock;
+import ghidra.program.model.mem.MemoryAccessException;
 import ghidra.program.model.symbol.*;
 import ghidra.program.model.symbol.ReferenceManager;
 import ghidra.program.model.symbol.Reference;
@@ -21,6 +24,10 @@ import ghidra.app.decompiler.DecompileResults;
 import ghidra.app.plugin.PluginCategoryNames;
 import ghidra.app.services.CodeViewerService;
 import ghidra.app.services.ProgramManager;
+import ghidra.app.script.GhidraScript;
+import ghidra.app.script.GhidraScriptProvider;
+import ghidra.app.script.GhidraScriptUtil;
+import ghidra.app.script.GhidraState;
 import ghidra.app.util.PseudoDisassembler;
 import ghidra.app.cmd.function.SetVariableNameCmd;
 import ghidra.program.model.symbol.SourceType;
@@ -44,6 +51,7 @@ import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
 import ghidra.app.decompiler.ClangToken;
 import ghidra.framework.options.Options;
+import ghidra.app.plugin.core.analysis.AutoAnalysisManager;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
@@ -51,11 +59,14 @@ import com.sun.net.httpserver.HttpServer;
 import javax.swing.SwingUtilities;
 import java.io.IOException;
 import java.io.OutputStream;
+import java.io.PrintWriter;
+import java.io.StringWriter;
 import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 @PluginInfo(
@@ -223,12 +234,75 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, disassembleFunction(address));
         });
 
+        server.createContext("/create_function_by_address", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String entry = params.get("entry");
+            String name = params.get("name");
+            String bodyStart = params.get("body_start");
+            String bodyEnd = params.get("body_end");
+            String comment = params.get("comment");
+            sendResponse(exchange, createFunctionByAddress(entry, name, bodyStart, bodyEnd, comment));
+        });
+
+        server.createContext("/delete_function_by_address", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String entry = params.get("entry");
+            sendResponse(exchange, deleteFunctionByAddress(entry));
+        });
+
+        server.createContext("/get_function_containing", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getFunctionContaining(address));
+        });
+
+        server.createContext("/read_region", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String start = qparams.get("start");
+            String end = qparams.get("end");
+            sendResponse(exchange, readRegion(start, end));
+        });
+
+        server.createContext("/disassemble_region", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String start = qparams.get("start");
+            String end = qparams.get("end");
+            sendResponse(exchange, disassembleRegion(start, end));
+        });
+
+        server.createContext("/get_instruction_window", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int beforeCount = parseIntOrDefault(qparams.get("before_count"), 5);
+            int afterCount = parseIntOrDefault(qparams.get("after_count"), 5);
+            sendResponse(exchange, getInstructionWindow(address, beforeCount, afterCount));
+        });
+
+        server.createContext("/search_instructions", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String query = qparams.get("query");
+            String mode = qparams.get("mode");
+            int limit = parseIntOrDefault(qparams.get("limit"), 200);
+            sendResponse(exchange, searchInstructions(query, mode, limit));
+        });
+
+        server.createContext("/get_data_uses", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            boolean includeOperandScans = parseBooleanOrDefault(qparams.get("include_operand_scans"), true);
+            int limit = parseIntOrDefault(qparams.get("limit"), 200);
+            sendResponse(exchange, getDataUses(address, includeOperandScans, limit));
+        });
+
         server.createContext("/set_decompiler_comment", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String address = params.get("address");
             String comment = params.get("comment");
             boolean success = setDecompilerComment(address, comment);
-            sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
+            String status = success ? "ok" : "failed";
+            sendResponse(exchange,
+                status + ": set_decompiler_comment address=" + safeValueForResponse(address) +
+                " comment=\"" + previewForResponse(comment) + "\"");
         });
 
         server.createContext("/set_disassembly_comment", exchange -> {
@@ -236,7 +310,10 @@ public class GhidraMCPPlugin extends Plugin {
             String address = params.get("address");
             String comment = params.get("comment");
             boolean success = setDisassemblyComment(address, comment);
-            sendResponse(exchange, success ? "Comment set successfully" : "Failed to set comment");
+            String status = success ? "ok" : "failed";
+            sendResponse(exchange,
+                status + ": set_disassembly_comment address=" + safeValueForResponse(address) +
+                " comment=\"" + previewForResponse(comment) + "\"");
         });
 
         server.createContext("/rename_function_by_address", exchange -> {
@@ -244,7 +321,10 @@ public class GhidraMCPPlugin extends Plugin {
             String functionAddress = params.get("function_address");
             String newName = params.get("new_name");
             boolean success = renameFunctionByAddress(functionAddress, newName);
-            sendResponse(exchange, success ? "Function renamed successfully" : "Failed to rename function");
+            String status = success ? "ok" : "failed";
+            sendResponse(exchange,
+                status + ": rename_function_by_address function_address=" + safeValueForResponse(functionAddress) +
+                " new_name=" + safeValueForResponse(newName));
         });
 
         server.createContext("/set_function_prototype", exchange -> {
@@ -254,17 +334,15 @@ public class GhidraMCPPlugin extends Plugin {
 
             // Call the set prototype function and get detailed result
             PrototypeResult result = setFunctionPrototype(functionAddress, prototype);
+            String status = result.isSuccess() ? "ok" : "failed";
+            String base = status + ": set_function_prototype function_address=" +
+                safeValueForResponse(functionAddress) + " prototype=\"" +
+                previewForResponse(prototype) + "\"";
 
-            if (result.isSuccess()) {
-                // Even with successful operations, include any warning messages for debugging
-                String successMsg = "Function prototype set successfully";
-                if (!result.getErrorMessage().isEmpty()) {
-                    successMsg += "\n\nWarnings/Debug Info:\n" + result.getErrorMessage();
-                }
-                sendResponse(exchange, successMsg);
+            if (result.getErrorMessage().isBlank()) {
+                sendResponse(exchange, base);
             } else {
-                // Return the detailed error message to the client
-                sendResponse(exchange, "Failed to set function prototype: " + result.getErrorMessage());
+                sendResponse(exchange, base + "\n" + result.getErrorMessage());
             }
         });
 
@@ -317,7 +395,25 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, getXrefsTo(address, offset, limit));
         });
 
+        // Alias route for clients that use get_* naming for xref tools.
+        server.createContext("/get_xrefs_to", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, getXrefsTo(address, offset, limit));
+        });
+
         server.createContext("/xrefs_from", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int offset = parseIntOrDefault(qparams.get("offset"), 0);
+            int limit = parseIntOrDefault(qparams.get("limit"), 100);
+            sendResponse(exchange, getXrefsFrom(address, offset, limit));
+        });
+
+        // Alias route for clients that use get_* naming for xref tools.
+        server.createContext("/get_xrefs_from", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
@@ -339,6 +435,71 @@ public class GhidraMCPPlugin extends Plugin {
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
             sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+        });
+
+        server.createContext("/set_comments", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String batch = params.get("batch");
+            sendResponse(exchange, setCommentsBatch(batch, CodeUnit.EOL_COMMENT, "Set disassembly comments batch"));
+        });
+
+        server.createContext("/set_decompiler_comments", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String batch = params.get("batch");
+            sendResponse(exchange, setCommentsBatch(batch, CodeUnit.PRE_COMMENT, "Set decompiler comments batch"));
+        });
+
+        server.createContext("/rename_functions_by_address", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String batch = params.get("batch");
+            sendResponse(exchange, renameFunctionsByAddressBatch(batch));
+        });
+
+        server.createContext("/apply_program_edit_plan", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String plan = params.get("plan");
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, applyProgramEditPlan(plan, dryRun));
+        });
+
+        server.createContext("/reanalyze_region", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String start = params.get("start");
+            String end = params.get("end");
+            sendResponse(exchange, reanalyzeRegion(start, end));
+        });
+
+        server.createContext("/patch_bytes_and_reanalyze", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String start = params.get("start");
+            String bytes = params.get("bytes");
+            String comment = params.get("comment");
+            sendResponse(exchange, patchBytesAndReanalyze(start, bytes, comment));
+        });
+
+        server.createContext("/analyze_function_boundaries", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String start = qparams.get("start");
+            String end = qparams.get("end");
+            sendResponse(exchange, analyzeFunctionBoundaries(start, end));
+        });
+
+        server.createContext("/get_project_access_info", exchange -> {
+            sendResponse(exchange, getProjectAccessInfo());
+        });
+
+        server.createContext("/open_current_program_readonly", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            int version = parseIntOrDefault(params.get("version"), -1);
+            boolean makeCurrent = parseBooleanOrDefault(params.get("make_current"), true);
+            sendResponse(exchange, openCurrentProgramReadonly(version, makeCurrent));
+        });
+
+        server.createContext("/run_readonly_script", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String scriptPath = params.get("script_path");
+            String scriptText = params.get("script_text");
+            sendResponse(exchange, runReadonlyScript(scriptPath, scriptText));
         });
 
         server.setExecutor(null);
@@ -858,6 +1019,24 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Set a comment using the specified comment type (PRE_COMMENT or EOL_COMMENT)
      */
+    private String safeValueForResponse(String value) {
+        if (value == null || value.isBlank()) {
+            return "<empty>";
+        }
+        return value;
+    }
+
+    private String previewForResponse(String value) {
+        if (value == null || value.isBlank()) {
+            return "";
+        }
+        String normalized = value.replace("\r", " ").replace("\n", " ").trim();
+        if (normalized.length() <= 120) {
+            return normalized;
+        }
+        return normalized.substring(0, 117) + "...";
+    }
+
     private boolean setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
         Program program = getCurrentProgram();
         if (program == null) return false;
@@ -1019,7 +1198,7 @@ public class GhidraMCPPlugin extends Plugin {
             addPrototypeComment(program, func, prototype);
 
             // Use ApplyFunctionSignatureCmd to parse and apply the signature
-            parseFunctionSignatureAndApply(program, addr, prototype, success, errorMessage);
+            parseFunctionSignatureAndApply(program, addr, func, prototype, success, errorMessage);
 
         } catch (Exception e) {
             String msg = "Error setting function prototype: " + e.getMessage();
@@ -1047,7 +1226,7 @@ public class GhidraMCPPlugin extends Plugin {
     /**
      * Parse and apply the function signature with error handling
      */
-    private void parseFunctionSignatureAndApply(Program program, Address addr, String prototype,
+    private void parseFunctionSignatureAndApply(Program program, Address addr, Function func, String prototype,
                                               AtomicBoolean success, StringBuilder errorMessage) {
         // Use ApplyFunctionSignatureCmd to parse and apply the signature
         int txProto = program.startTransaction("Set function prototype");
@@ -1063,32 +1242,56 @@ public class GhidraMCPPlugin extends Plugin {
             ghidra.app.util.parser.FunctionSignatureParser parser = 
                 new ghidra.app.util.parser.FunctionSignatureParser(dtm, dtms);
 
-            // Parse the prototype into a function signature
-            ghidra.program.model.data.FunctionDefinitionDataType sig = parser.parse(null, prototype);
+            List<String> candidates = buildPrototypeCandidates(prototype);
+            StringBuilder attemptLog = new StringBuilder();
 
-            if (sig == null) {
-                String msg = "Failed to parse function prototype";
-                errorMessage.append(msg);
-                Msg.error(this, msg);
-                return;
+            for (String candidate : candidates) {
+                try {
+                    ghidra.program.model.data.FunctionDefinitionDataType sig = parser.parse(null, candidate);
+
+                    if (sig == null) {
+                        attemptLog.append("candidate rejected: \"")
+                            .append(previewForResponse(candidate))
+                            .append("\"\n");
+                        continue;
+                    }
+
+                    ghidra.app.cmd.function.ApplyFunctionSignatureCmd cmd =
+                        new ghidra.app.cmd.function.ApplyFunctionSignatureCmd(
+                            addr, sig, SourceType.USER_DEFINED);
+
+                    boolean cmdResult = cmd.applyTo(program, new ConsoleTaskMonitor());
+                    if (cmdResult) {
+                        success.set(true);
+                        Msg.info(this, "Successfully applied function signature");
+                        if (!prototype.equals(candidate)) {
+                            errorMessage.append("applied with normalized signature: ")
+                                .append(candidate);
+                        }
+                        return;
+                    }
+
+                    attemptLog.append("candidate apply failed: \"")
+                        .append(previewForResponse(candidate))
+                        .append("\" -> ")
+                        .append(cmd.getStatusMsg())
+                        .append("\n");
+                } catch (Exception candidateEx) {
+                    attemptLog.append("candidate parse failed: \"")
+                        .append(previewForResponse(candidate))
+                        .append("\" -> ")
+                        .append(candidateEx.getMessage())
+                        .append("\n");
+                }
             }
 
-            // Create and apply the command
-            ghidra.app.cmd.function.ApplyFunctionSignatureCmd cmd = 
-                new ghidra.app.cmd.function.ApplyFunctionSignatureCmd(
-                    addr, sig, SourceType.USER_DEFINED);
-
-            // Apply the command to the program
-            boolean cmdResult = cmd.applyTo(program, new ConsoleTaskMonitor());
-
-            if (cmdResult) {
-                success.set(true);
-                Msg.info(this, "Successfully applied function signature");
-            } else {
-                String msg = "Command failed: " + cmd.getStatusMsg();
-                errorMessage.append(msg);
-                Msg.error(this, msg);
+            errorMessage.append("Unable to parse/apply function prototype.");
+            if (attemptLog.length() > 0) {
+                errorMessage.append("\nAttempts:\n").append(attemptLog);
             }
+            errorMessage.append("Accepted template example: void ")
+                .append(func.getName())
+                .append("(void)");
         } catch (Exception e) {
             String msg = "Error applying function signature: " + e.getMessage();
             errorMessage.append(msg);
@@ -1096,6 +1299,61 @@ public class GhidraMCPPlugin extends Plugin {
         } finally {
             program.endTransaction(txProto, success.get());
         }
+    }
+
+    private List<String> buildPrototypeCandidates(String prototype) {
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        String original = normalizeWhitespace(prototype);
+        if (!original.isBlank()) {
+            candidates.add(original);
+        }
+
+        String mappedLegacy = normalizeLegacyCallingConventions(original, true);
+        if (!mappedLegacy.isBlank()) {
+            candidates.add(mappedLegacy);
+        }
+
+        String strippedLegacy = normalizeLegacyCallingConventions(original, false);
+        if (!strippedLegacy.isBlank()) {
+            candidates.add(strippedLegacy);
+        }
+
+        return new ArrayList<>(candidates);
+    }
+
+    private String normalizeWhitespace(String value) {
+        if (value == null) {
+            return "";
+        }
+        return value.replaceAll("\\s+", " ").trim();
+    }
+
+    private String normalizeLegacyCallingConventions(String prototype, boolean mapToCdecl) {
+        if (prototype == null || prototype.isBlank()) {
+            return "";
+        }
+
+        String normalized = prototype;
+        String[] legacyToCdecl = {
+            "__cdecl16far", "__cdecl16near", "__cdecl16",
+            "__stdcall16far", "__stdcall16near", "__stdcall16",
+            "__pascal16far", "__pascal16near", "__pascal16"
+        };
+
+        for (String token : legacyToCdecl) {
+            normalized = normalized.replaceAll("(?i)\\b" + Pattern.quote(token) + "\\b", mapToCdecl ? "__cdecl" : " ");
+        }
+
+        String[] removeOnly = {
+            "__far", "__near", "__huge", "far", "near", "huge",
+            "__interrupt", "__loadds", "__saveregs", "__export"
+        };
+
+        for (String token : removeOnly) {
+            normalized = normalized.replaceAll("(?i)\\b" + Pattern.quote(token) + "\\b", " ");
+        }
+
+        return normalizeWhitespace(normalized);
     }
 
     /**
@@ -1263,9 +1521,19 @@ public class GhidraMCPPlugin extends Plugin {
                 RefType refType = ref.getReferenceType();
                 
                 Function fromFunc = program.getFunctionManager().getFunctionContaining(fromAddr);
-                String funcInfo = (fromFunc != null) ? " in " + fromFunc.getName() : "";
-                
-                refs.add(String.format("From %s%s [%s]", fromAddr, funcInfo, refType.getName()));
+                Function toFunc = program.getFunctionManager().getFunctionContaining(addr);
+
+                refs.add(String.format(
+                    "from=%s\tfrom_function=%s\tto=%s\tto_function=%s\tref_type=%s\tref_kind=%s\top_index=%d\tprimary=%s",
+                    fromAddr,
+                    safeFunctionName(fromFunc),
+                    addr,
+                    safeFunctionName(toFunc),
+                    refType.getName(),
+                    classifyRefKind(refType),
+                    ref.getOperandIndex(),
+                    ref.isPrimary()
+                ));
             }
             
             return paginateList(refs, offset, limit);
@@ -1292,25 +1560,57 @@ public class GhidraMCPPlugin extends Plugin {
             for (Reference ref : references) {
                 Address toAddr = ref.getToAddress();
                 RefType refType = ref.getReferenceType();
-                
-                String targetInfo = "";
-                Function toFunc = program.getFunctionManager().getFunctionAt(toAddr);
-                if (toFunc != null) {
-                    targetInfo = " to function " + toFunc.getName();
-                } else {
-                    Data data = program.getListing().getDataAt(toAddr);
-                    if (data != null) {
-                        targetInfo = " to data " + (data.getLabel() != null ? data.getLabel() : data.getPathName());
-                    }
-                }
-                
-                refs.add(String.format("To %s%s [%s]", toAddr, targetInfo, refType.getName()));
+
+                Function fromFunc = program.getFunctionManager().getFunctionContaining(addr);
+                Function toFunc = program.getFunctionManager().getFunctionContaining(toAddr);
+
+                refs.add(String.format(
+                    "from=%s\tfrom_function=%s\tto=%s\tto_function=%s\tref_type=%s\tref_kind=%s\top_index=%d\tprimary=%s",
+                    addr,
+                    safeFunctionName(fromFunc),
+                    toAddr,
+                    safeFunctionName(toFunc),
+                    refType.getName(),
+                    classifyRefKind(refType),
+                    ref.getOperandIndex(),
+                    ref.isPrimary()
+                ));
             }
             
             return paginateList(refs, offset, limit);
         } catch (Exception e) {
             return "Error getting references from address: " + e.getMessage();
         }
+    }
+
+    private String safeFunctionName(Function function) {
+        if (function == null) {
+            return "<none>";
+        }
+        String name = function.getName();
+        if (name == null || name.isBlank()) {
+            return "<unnamed>";
+        }
+        return name;
+    }
+
+    private String classifyRefKind(RefType refType) {
+        if (refType == null) {
+            return "other";
+        }
+        if (refType.isCall()) {
+            return "call";
+        }
+        if (refType.isJump()) {
+            return "jump";
+        }
+        if (refType.isRead()) {
+            return "read";
+        }
+        if (refType.isWrite()) {
+            return "write";
+        }
+        return "other";
     }
 
     /**
@@ -1527,6 +1827,904 @@ public class GhidraMCPPlugin extends Plugin {
         return null;
     }
 
+    private String createFunctionByAddress(String entryStr, String name, String bodyStartStr, String bodyEndStr, String comment) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (entryStr == null || bodyStartStr == null || bodyEndStr == null) {
+            return "entry, body_start and body_end are required";
+        }
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder message = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Create function by address");
+                try {
+                    Address entry = program.getAddressFactory().getAddress(entryStr);
+                    Address bodyStart = program.getAddressFactory().getAddress(bodyStartStr);
+                    Address bodyEnd = program.getAddressFactory().getAddress(bodyEndStr);
+                    if (entry == null || bodyStart == null || bodyEnd == null) {
+                        message.append("Invalid address");
+                        return;
+                    }
+                    if (bodyEnd.compareTo(bodyStart) < 0) {
+                        message.append("body_end must be >= body_start");
+                        return;
+                    }
+
+                    String functionName = (name == null || name.isBlank()) ? "sub_" + entry : name;
+                    AddressSet body = new AddressSet(bodyStart, bodyEnd);
+                    Function created = program.getFunctionManager().createFunction(functionName, entry, body, SourceType.USER_DEFINED);
+                    if (created == null) {
+                        message.append("Function creation returned null");
+                        return;
+                    }
+
+                    if (comment != null && !comment.isBlank()) {
+                        program.getListing().setComment(entry, CodeUnit.PRE_COMMENT, comment);
+                    }
+
+                    success.set(true);
+                    message.append("Created function ").append(created.getName()).append(" at ").append(created.getEntryPoint())
+                        .append(" body ").append(created.getBody().getMinAddress()).append(" - ").append(created.getBody().getMaxAddress());
+                } catch (Exception e) {
+                    message.append("Error creating function: ").append(e.getMessage());
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to create function on Swing thread: " + e.getMessage();
+        }
+        return message.toString();
+    }
+
+    private String deleteFunctionByAddress(String entryStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (entryStr == null || entryStr.isBlank()) return "entry is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        StringBuilder message = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Delete function by address");
+                try {
+                    Address entry = program.getAddressFactory().getAddress(entryStr);
+                    if (entry == null) {
+                        message.append("Invalid address");
+                        return;
+                    }
+                    Function existing = program.getFunctionManager().getFunctionAt(entry);
+                    if (existing == null) {
+                        message.append("No function found at entry ").append(entryStr);
+                        return;
+                    }
+                    boolean removed = program.getFunctionManager().removeFunction(entry);
+                    success.set(removed);
+                    message.append(removed ? "Deleted function at " + entry : "Failed to delete function at " + entry);
+                } catch (Exception e) {
+                    message.append("Error deleting function: ").append(e.getMessage());
+                } finally {
+                    program.endTransaction(tx, success.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to delete function on Swing thread: " + e.getMessage();
+        }
+        return message.toString();
+    }
+
+    private String getFunctionContaining(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "address is required";
+
+        try {
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "Invalid address";
+            Function func = program.getFunctionManager().getFunctionContaining(addr);
+            if (func == null) return "No function contains address " + addressStr;
+            return String.format("Function: %s at %s\nContains: %s\nBody: %s - %s",
+                func.getName(),
+                func.getEntryPoint(),
+                addr,
+                func.getBody().getMinAddress(),
+                func.getBody().getMaxAddress());
+        } catch (Exception e) {
+            return "Error getting containing function: " + e.getMessage();
+        }
+    }
+
+    private String readRegion(String startStr, String endStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (startStr == null || endStr == null) return "start and end are required";
+
+        try {
+            Address start = program.getAddressFactory().getAddress(startStr);
+            Address end = program.getAddressFactory().getAddress(endStr);
+            if (start == null || end == null) return "Invalid start or end address";
+            if (end.compareTo(start) < 0) return "end must be >= start";
+
+            long sizeLong = end.subtract(start) + 1;
+            if (sizeLong <= 0 || sizeLong > 1024 * 1024) {
+                return "Requested region size is out of supported range (1..1048576 bytes)";
+            }
+
+            Memory memory = program.getMemory();
+            int size = (int) sizeLong;
+            byte[] data = new byte[size];
+            int bytesRead = memory.getBytes(start, data);
+            if (bytesRead <= 0) {
+                return "No bytes could be read from region";
+            }
+
+            return formatRegionHexDump(start, data, bytesRead);
+        } catch (MemoryAccessException e) {
+            return "Memory access error: " + e.getMessage();
+        } catch (Exception e) {
+            return "Error reading region: " + e.getMessage();
+        }
+    }
+
+    private String formatRegionHexDump(Address start, byte[] data, int size) {
+        StringBuilder out = new StringBuilder();
+        out.append("start=").append(start).append(" size=").append(size).append("\n");
+        for (int i = 0; i < size; i += 16) {
+            int rowLen = Math.min(16, size - i);
+            Address rowAddr = start.add(i);
+            out.append(rowAddr).append(": ");
+            for (int j = 0; j < rowLen; j++) {
+                out.append(String.format("%02x", data[i + j] & 0xff));
+                if (j + 1 < rowLen) {
+                    out.append(' ');
+                }
+            }
+            out.append("\n");
+        }
+        return out.toString();
+    }
+
+    private String disassembleRegion(String startStr, String endStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (startStr == null || endStr == null) return "start and end are required";
+
+        try {
+            Address start = program.getAddressFactory().getAddress(startStr);
+            Address end = program.getAddressFactory().getAddress(endStr);
+            if (start == null || end == null) return "Invalid start or end address";
+            if (end.compareTo(start) < 0) return "end must be >= start";
+
+            Listing listing = program.getListing();
+            InstructionIterator it = listing.getInstructions(start, true);
+            StringBuilder out = new StringBuilder();
+            while (it.hasNext()) {
+                Instruction ins = it.next();
+                if (ins.getAddress().compareTo(end) > 0) {
+                    break;
+                }
+                out.append(formatInstructionLine(program, ins)).append("\n");
+            }
+
+            return out.length() == 0 ? "No instructions found in range" : out.toString();
+        } catch (Exception e) {
+            return "Error disassembling region: " + e.getMessage();
+        }
+    }
+
+    private String getInstructionWindow(String addressStr, int beforeCount, int afterCount) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "address is required";
+
+        try {
+            Listing listing = program.getListing();
+            Address addr = program.getAddressFactory().getAddress(addressStr);
+            if (addr == null) return "Invalid address";
+
+            Instruction center = listing.getInstructionContaining(addr);
+            if (center == null) {
+                center = listing.getInstructionAt(addr);
+            }
+            if (center == null) return "No instruction at or containing address " + addressStr;
+
+            List<Instruction> before = new ArrayList<>();
+            Instruction cursor = center;
+            for (int i = 0; i < Math.max(0, beforeCount); i++) {
+                cursor = listing.getInstructionBefore(cursor.getAddress());
+                if (cursor == null) {
+                    break;
+                }
+                before.add(cursor);
+            }
+            Collections.reverse(before);
+
+            StringBuilder out = new StringBuilder();
+            for (Instruction ins : before) {
+                out.append(formatInstructionLine(program, ins)).append("\n");
+            }
+            out.append(">>> ").append(formatInstructionLine(program, center)).append("\n");
+
+            cursor = center;
+            for (int i = 0; i < Math.max(0, afterCount); i++) {
+                cursor = listing.getInstructionAfter(cursor.getAddress());
+                if (cursor == null) {
+                    break;
+                }
+                out.append(formatInstructionLine(program, cursor)).append("\n");
+            }
+
+            return out.toString();
+        } catch (Exception e) {
+            return "Error reading instruction window: " + e.getMessage();
+        }
+    }
+
+    private String searchInstructions(String query, String mode, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (query == null || query.isBlank()) return "query is required";
+
+        String searchMode = (mode == null || mode.isBlank()) ? "text" : mode.toLowerCase(Locale.ROOT);
+        int maxResults = Math.max(1, Math.min(limit, 5000));
+
+        Listing listing = program.getListing();
+        InstructionIterator it = listing.getInstructions(true);
+        List<String> matches = new ArrayList<>();
+        String needle = query.toLowerCase(Locale.ROOT);
+
+        while (it.hasNext() && matches.size() < maxResults) {
+            Instruction ins = it.next();
+            if (instructionMatches(ins, needle, searchMode)) {
+                matches.add(formatInstructionLine(program, ins));
+            }
+        }
+
+        if (matches.isEmpty()) {
+            return "No matching instructions found";
+        }
+        return String.join("\n", matches);
+    }
+
+    private boolean instructionMatches(Instruction ins, String needle, String mode) {
+        String rendered = ins.toString().toLowerCase(Locale.ROOT);
+        if ("text".equals(mode)) {
+            return rendered.contains(needle) || ins.getAddress().toString().toLowerCase(Locale.ROOT).contains(needle);
+        }
+
+        if ("address".equals(mode)) {
+            if (ins.getAddress().toString().toLowerCase(Locale.ROOT).contains(needle)) {
+                return true;
+            }
+            int operandCount = ins.getNumOperands();
+            for (int i = 0; i < operandCount; i++) {
+                Address operandAddr = ins.getAddress(i);
+                if (operandAddr != null && operandAddr.toString().toLowerCase(Locale.ROOT).contains(needle)) {
+                    return true;
+                }
+                String repr = safeOperandRepresentation(ins, i);
+                if (repr.contains(needle)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if ("operand".equals(mode)) {
+            int operandCount = ins.getNumOperands();
+            for (int i = 0; i < operandCount; i++) {
+                String repr = safeOperandRepresentation(ins, i);
+                if (repr.contains(needle)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        return rendered.contains(needle);
+    }
+
+    private String safeOperandRepresentation(Instruction ins, int operandIndex) {
+        try {
+            return ins.getDefaultOperandRepresentation(operandIndex).toLowerCase(Locale.ROOT);
+        } catch (Exception ignored) {
+            return "";
+        }
+    }
+
+    private String getDataUses(String addressStr, boolean includeOperandScans, int limit) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "address is required";
+
+        LinkedHashSet<String> uses = new LinkedHashSet<>();
+
+        String xrefs = getXrefsTo(addressStr, 0, Math.max(1, limit));
+        if (xrefs != null && !xrefs.isBlank()) {
+            for (String line : xrefs.split("\\r?\\n")) {
+                if (!line.isBlank()) {
+                    uses.add("xref: " + line);
+                }
+            }
+        }
+
+        if (includeOperandScans && uses.size() < limit) {
+            String scanned = searchInstructions(addressStr, "address", limit);
+            if (scanned != null && !scanned.isBlank() && !scanned.startsWith("No matching")) {
+                for (String line : scanned.split("\\r?\\n")) {
+                    if (!line.isBlank()) {
+                        uses.add("scan: " + line);
+                        if (uses.size() >= limit) {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (uses.isEmpty()) {
+            return "No uses found for " + addressStr;
+        }
+        return String.join("\n", uses);
+    }
+
+    private String setCommentsBatch(String batch, int commentType, String transactionName) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (batch == null || batch.isBlank()) return "batch is required";
+
+        AtomicBoolean committed = new AtomicBoolean(false);
+        StringBuilder out = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction(transactionName);
+                int applied = 0;
+                int failed = 0;
+                try {
+                    for (String line : batch.split("\\r?\\n")) {
+                        if (line.isBlank()) {
+                            continue;
+                        }
+                        String[] parts = line.split("\\t", 2);
+                        if (parts.length != 2) {
+                            failed++;
+                            out.append("invalid line (expected address<TAB>comment): ").append(line).append("\n");
+                            continue;
+                        }
+                        try {
+                            Address addr = program.getAddressFactory().getAddress(parts[0].trim());
+                            if (addr == null) {
+                                failed++;
+                                out.append("invalid address: ").append(parts[0]).append("\n");
+                                continue;
+                            }
+                            program.getListing().setComment(addr, commentType, parts[1]);
+                            applied++;
+                        } catch (Exception e) {
+                            failed++;
+                            out.append("failed ").append(parts[0]).append(": ").append(e.getMessage()).append("\n");
+                        }
+                    }
+                    committed.set(true);
+                    out.append("applied=").append(applied).append(" failed=").append(failed);
+                } finally {
+                    program.endTransaction(tx, committed.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to apply batch comments on Swing thread: " + e.getMessage();
+        }
+
+        return out.toString();
+    }
+
+    private String renameFunctionsByAddressBatch(String batch) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (batch == null || batch.isBlank()) return "batch is required";
+
+        AtomicBoolean committed = new AtomicBoolean(false);
+        StringBuilder out = new StringBuilder();
+
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Rename functions batch");
+                int applied = 0;
+                int failed = 0;
+                try {
+                    for (String line : batch.split("\\r?\\n")) {
+                        if (line.isBlank()) {
+                            continue;
+                        }
+                        String[] parts = line.split("\\t", 2);
+                        if (parts.length != 2) {
+                            failed++;
+                            out.append("invalid line (expected address<TAB>name): ").append(line).append("\n");
+                            continue;
+                        }
+                        try {
+                            Address addr = program.getAddressFactory().getAddress(parts[0].trim());
+                            Function func = getFunctionForAddress(program, addr);
+                            if (func == null) {
+                                failed++;
+                                out.append("no function for ").append(parts[0]).append("\n");
+                                continue;
+                            }
+                            func.setName(parts[1].trim(), SourceType.USER_DEFINED);
+                            applied++;
+                        } catch (Exception e) {
+                            failed++;
+                            out.append("failed ").append(parts[0]).append(": ").append(e.getMessage()).append("\n");
+                        }
+                    }
+                    committed.set(true);
+                    out.append("applied=").append(applied).append(" failed=").append(failed);
+                } finally {
+                    program.endTransaction(tx, committed.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Failed to apply function rename batch on Swing thread: " + e.getMessage();
+        }
+
+        return out.toString();
+    }
+
+    private String applyProgramEditPlan(String plan, boolean dryRun) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (plan == null || plan.isBlank()) return "plan is required";
+
+        StringBuilder out = new StringBuilder();
+        int successCount = 0;
+        int failCount = 0;
+
+        String[] lines = plan.split("\\r?\\n");
+        for (String rawLine : lines) {
+            String line = rawLine.trim();
+            if (line.isEmpty() || line.startsWith("#")) {
+                continue;
+            }
+
+            String[] parts = line.split("\\|", -1);
+            String action = parts[0].trim().toLowerCase(Locale.ROOT);
+            try {
+                if ("rename_function_by_address".equals(action) && parts.length >= 3) {
+                    if (dryRun) {
+                        out.append("DRY-RUN rename_function_by_address ").append(parts[1]).append(" -> ").append(parts[2]).append("\n");
+                        successCount++;
+                    } else {
+                        String result = renameFunctionByAddress(parts[1], parts[2]) ? "ok" : "failed";
+                        out.append("rename_function_by_address ").append(parts[1]).append(": ").append(result).append("\n");
+                        if ("ok".equals(result)) successCount++; else failCount++;
+                    }
+                    continue;
+                }
+
+                if ("set_disassembly_comment".equals(action) && parts.length >= 3) {
+                    if (dryRun) {
+                        out.append("DRY-RUN set_disassembly_comment ").append(parts[1]).append("\n");
+                        successCount++;
+                    } else {
+                        boolean ok = setDisassemblyComment(parts[1], parts[2]);
+                        out.append("set_disassembly_comment ").append(parts[1]).append(": ").append(ok ? "ok" : "failed").append("\n");
+                        if (ok) successCount++; else failCount++;
+                    }
+                    continue;
+                }
+
+                if ("set_decompiler_comment".equals(action) && parts.length >= 3) {
+                    if (dryRun) {
+                        out.append("DRY-RUN set_decompiler_comment ").append(parts[1]).append("\n");
+                        successCount++;
+                    } else {
+                        boolean ok = setDecompilerComment(parts[1], parts[2]);
+                        out.append("set_decompiler_comment ").append(parts[1]).append(": ").append(ok ? "ok" : "failed").append("\n");
+                        if (ok) successCount++; else failCount++;
+                    }
+                    continue;
+                }
+
+                if ("delete_function_by_address".equals(action) && parts.length >= 2) {
+                    if (dryRun) {
+                        out.append("DRY-RUN delete_function_by_address ").append(parts[1]).append("\n");
+                        successCount++;
+                    } else {
+                        String result = deleteFunctionByAddress(parts[1]);
+                        out.append("delete_function_by_address ").append(parts[1]).append(": ").append(result).append("\n");
+                        if (result.startsWith("Deleted function")) successCount++; else failCount++;
+                    }
+                    continue;
+                }
+
+                if ("create_function_by_address".equals(action) && parts.length >= 5) {
+                    String comment = parts.length >= 6 ? parts[5] : "";
+                    if (dryRun) {
+                        out.append("DRY-RUN create_function_by_address ").append(parts[1]).append("\n");
+                        successCount++;
+                    } else {
+                        String result = createFunctionByAddress(parts[1], parts[2], parts[3], parts[4], comment);
+                        out.append("create_function_by_address ").append(parts[1]).append(": ").append(result).append("\n");
+                        if (result.startsWith("Created function")) successCount++; else failCount++;
+                    }
+                    continue;
+                }
+
+                failCount++;
+                out.append("Unsupported or invalid plan line: ").append(line).append("\n");
+            } catch (Exception e) {
+                failCount++;
+                out.append("Failed line '").append(line).append("': ").append(e.getMessage()).append("\n");
+            }
+        }
+
+        out.append("summary success=").append(successCount).append(" failed=").append(failCount)
+            .append(" dry_run=").append(dryRun);
+        return out.toString();
+    }
+
+    private String reanalyzeRegion(String startStr, String endStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (startStr == null || endStr == null) return "start and end are required";
+
+        try {
+            Address start = program.getAddressFactory().getAddress(startStr);
+            Address end = program.getAddressFactory().getAddress(endStr);
+            if (start == null || end == null) return "Invalid start or end address";
+            if (end.compareTo(start) < 0) return "end must be >= start";
+
+            AutoAnalysisManager analysisManager = AutoAnalysisManager.getAnalysisManager(program);
+            analysisManager.startAnalysis(new ConsoleTaskMonitor());
+            return "Triggered analysis pass after region request " + start + " - " + end;
+        } catch (Exception e) {
+            return "Error during reanalysis: " + e.getMessage();
+        }
+    }
+
+    private String patchBytesAndReanalyze(String startStr, String bytesStr, String comment) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (startStr == null || startStr.isBlank()) return "start is required";
+        if (bytesStr == null || bytesStr.isBlank()) return "bytes is required";
+
+        byte[] patchBytes;
+        try {
+            patchBytes = parseHexBytes(bytesStr);
+        } catch (IllegalArgumentException e) {
+            return "Invalid bytes: " + e.getMessage();
+        }
+
+        AtomicBoolean committed = new AtomicBoolean(false);
+        StringBuilder out = new StringBuilder();
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = program.startTransaction("Patch bytes and reanalyze");
+                try {
+                    Address start = program.getAddressFactory().getAddress(startStr);
+                    if (start == null) {
+                        out.append("Invalid start address");
+                        return;
+                    }
+                    program.getMemory().setBytes(start, patchBytes);
+                    if (comment != null && !comment.isBlank()) {
+                        program.getListing().setComment(start, CodeUnit.EOL_COMMENT, comment);
+                    }
+                    committed.set(true);
+                    out.append("Patched ").append(patchBytes.length).append(" bytes at ").append(start);
+                } catch (Exception e) {
+                    out.append("Patch failed: ").append(e.getMessage());
+                } finally {
+                    program.endTransaction(tx, committed.get());
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            return "Patch failed on Swing thread: " + e.getMessage();
+        }
+
+        if (!committed.get()) {
+            return out.toString();
+        }
+
+        try {
+            Address start = program.getAddressFactory().getAddress(startStr);
+            Address end = start.add(patchBytes.length - 1L);
+            String reanalysis = reanalyzeRegion(start.toString(), end.toString());
+            return out.append("\n").append(reanalysis).toString();
+        } catch (Exception e) {
+            return out.append("\nReanalysis skipped: ").append(e.getMessage()).toString();
+        }
+    }
+
+    private byte[] parseHexBytes(String bytesStr) {
+        String cleaned = bytesStr.replace(",", " ").trim();
+        if (cleaned.isEmpty()) {
+            throw new IllegalArgumentException("empty byte string");
+        }
+        String[] parts = cleaned.split("\\s+");
+        byte[] out = new byte[parts.length];
+        for (int i = 0; i < parts.length; i++) {
+            String p = parts[i].toLowerCase(Locale.ROOT).replace("0x", "");
+            if (p.length() == 1) {
+                p = "0" + p;
+            }
+            if (p.length() != 2) {
+                throw new IllegalArgumentException("invalid token: " + parts[i]);
+            }
+            out[i] = (byte) Integer.parseInt(p, 16);
+        }
+        return out;
+    }
+
+    private String analyzeFunctionBoundaries(String startStr, String endStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+        if (startStr == null || endStr == null) return "start and end are required";
+
+        try {
+            Address start = program.getAddressFactory().getAddress(startStr);
+            Address end = program.getAddressFactory().getAddress(endStr);
+            if (start == null || end == null) return "Invalid start or end address";
+            if (end.compareTo(start) < 0) return "end must be >= start";
+
+            FunctionManager fm = program.getFunctionManager();
+            List<Function> inRange = new ArrayList<>();
+            AddressSet querySet = new AddressSet(start, end);
+            Iterator<Function> overlapIt = fm.getFunctionsOverlapping(querySet);
+            while (overlapIt.hasNext()) {
+                inRange.add(overlapIt.next());
+            }
+
+            List<String> findings = new ArrayList<>();
+            inRange.sort(Comparator.comparing(Function::getEntryPoint));
+
+            for (int i = 0; i < inRange.size(); i++) {
+                Function curr = inRange.get(i);
+                findings.add(String.format("function %s @ %s body %s - %s",
+                    curr.getName(),
+                    curr.getEntryPoint(),
+                    curr.getBody().getMinAddress(),
+                    curr.getBody().getMaxAddress()));
+
+                if (i + 1 < inRange.size()) {
+                    Function next = inRange.get(i + 1);
+                    if (curr.getBody().intersects(next.getBody())) {
+                        findings.add(String.format("overlap warning: %s intersects %s",
+                            curr.getName(), next.getName()));
+                    }
+                }
+            }
+
+            Listing listing = program.getListing();
+            Address cursor = start;
+            while (cursor != null && cursor.compareTo(end) <= 0) {
+                Instruction ins = listing.getInstructionAt(cursor);
+                if (ins == null) {
+                    cursor = cursor.next();
+                    continue;
+                }
+                Function owner = fm.getFunctionContaining(ins.getAddress());
+                if (owner == null && looksLikeFunctionStart(ins)) {
+                    findings.add("candidate entry: " + formatInstructionLine(program, ins));
+                }
+                cursor = ins.getMaxAddress().next();
+            }
+
+            if (findings.isEmpty()) {
+                return "No function overlap warnings or candidate entries found";
+            }
+            return String.join("\n", findings);
+        } catch (Exception e) {
+            return "Error analyzing boundaries: " + e.getMessage();
+        }
+    }
+
+    private boolean looksLikeFunctionStart(Instruction ins) {
+        String mnemonic = ins.getMnemonicString();
+        if (mnemonic == null) {
+            return false;
+        }
+        String m = mnemonic.toLowerCase(Locale.ROOT);
+        return "push".equals(m) || "enter".equals(m) || "stp".equals(m);
+    }
+
+    private String formatInstructionLine(Program program, Instruction ins) {
+        String comment = program.getListing().getComment(CodeUnit.EOL_COMMENT, ins.getAddress());
+        if (comment == null) {
+            comment = "";
+        }
+        return String.format("%s: %s%s",
+            ins.getAddress(),
+            ins.toString(),
+            comment.isBlank() ? "" : " ; " + comment);
+    }
+
+    private String getProjectAccessInfo() {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        StringBuilder out = new StringBuilder();
+        out.append("program=").append(program.getName()).append("\n");
+        out.append("temporary=").append(program.isTemporary()).append("\n");
+        out.append("changed=").append(program.isChanged()).append("\n");
+        out.append("can_save=").append(program.canSave()).append("\n");
+
+        ghidra.framework.model.DomainFile df = program.getDomainFile();
+        if (df == null) {
+            out.append("domain_file=<none>\n");
+            return out.toString();
+        }
+
+        out.append("domain_file=").append(df.getPathname()).append("\n");
+        out.append("domain_is_read_only=").append(df.isReadOnly()).append("\n");
+        out.append("domain_is_versioned=").append(df.isVersioned()).append("\n");
+        out.append("domain_is_open=").append(df.isOpen()).append("\n");
+        out.append("domain_is_busy=").append(df.isBusy()).append("\n");
+        out.append("domain_is_in_writable_project=").append(df.isInWritableProject()).append("\n");
+        return out.toString();
+    }
+
+    private String openCurrentProgramReadonly(int version, boolean makeCurrent) {
+        Program current = getCurrentProgram();
+        if (current == null) return "No program loaded";
+
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) return "Program manager service not available";
+
+        ghidra.framework.model.DomainFile df = current.getDomainFile();
+        if (df == null) return "Current program has no domain file";
+
+        int requestedVersion = version <= 0 ? ghidra.framework.model.DomainFile.DEFAULT_VERSION : version;
+        try {
+            ghidra.framework.model.DomainObject roObj =
+                df.getReadOnlyDomainObject(this, requestedVersion, new ConsoleTaskMonitor());
+            if (!(roObj instanceof Program)) {
+                return "Read-only open did not return a Program";
+            }
+
+            Program roProgram = (Program) roObj;
+            pm.openProgram(roProgram, makeCurrent ? ProgramManager.OPEN_CURRENT : ProgramManager.OPEN_VISIBLE);
+            return "Opened read-only program: " + roProgram.getName() + " version=" + requestedVersion;
+        } catch (Exception e) {
+            return "Failed to open read-only program: " + e.getMessage();
+        }
+    }
+
+    private String runReadonlyScript(String scriptPath, String scriptText) {
+        Program program = getCurrentProgram();
+        if (program == null) return "No program loaded";
+
+        boolean hasPath = scriptPath != null && !scriptPath.isBlank();
+        boolean hasText = scriptText != null && !scriptText.isBlank();
+        if (!hasPath && !hasText) {
+            return "Provide script_path or script_text";
+        }
+        if (hasPath && hasText) {
+            return "Provide only one of script_path or script_text";
+        }
+
+        generic.jar.ResourceFile scriptFile = null;
+        boolean deleteAfterRun = false;
+        try {
+            if (hasPath) {
+                scriptFile = resolveScriptPath(scriptPath);
+                if (scriptFile == null || !scriptFile.exists()) {
+                    return "Script file not found: " + scriptPath;
+                }
+            } else {
+                validateReadonlyScriptText(scriptText);
+                scriptFile = writeTempReadonlyScript(scriptText);
+                deleteAfterRun = true;
+            }
+
+            GhidraScriptProvider provider = GhidraScriptUtil.getProvider(scriptFile);
+            if (provider == null) {
+                return "No script provider for file: " + scriptFile.getName();
+            }
+
+            StringWriter outputBuffer = new StringWriter();
+            PrintWriter writer = new PrintWriter(outputBuffer, true);
+            GhidraScript script = provider.getScriptInstance(scriptFile, writer);
+            if (script == null) {
+                return "Unable to load script";
+            }
+
+            validateReadonlyScriptText(loadScriptTextForValidation(scriptFile));
+
+            GhidraState state = new GhidraState(
+                tool,
+                tool.getProject(),
+                program,
+                null,
+                null,
+                null);
+
+            script.execute(state, new ConsoleTaskMonitor(), writer);
+
+            String output = outputBuffer.toString();
+            if (output.isBlank()) {
+                return "Script executed with no output";
+            }
+            return output;
+        } catch (Exception e) {
+            return "Failed to run readonly script: " + e.getMessage();
+        } finally {
+            if (deleteAfterRun && scriptFile != null) {
+                scriptFile.delete();
+            }
+        }
+    }
+
+    private generic.jar.ResourceFile resolveScriptPath(String scriptPath) {
+        if (scriptPath == null || scriptPath.isBlank()) {
+            return null;
+        }
+
+        generic.jar.ResourceFile byName = GhidraScriptUtil.findScriptByName(scriptPath);
+        if (byName != null && byName.exists()) {
+            return byName;
+        }
+
+        generic.jar.ResourceFile direct = new generic.jar.ResourceFile(scriptPath);
+        if (direct.exists()) {
+            return direct;
+        }
+
+        return null;
+    }
+
+    private generic.jar.ResourceFile writeTempReadonlyScript(String scriptText) throws IOException {
+        generic.jar.ResourceFile userDir = GhidraScriptUtil.getUserScriptDirectory();
+        if (userDir == null) {
+            throw new IOException("Ghidra user script directory not available");
+        }
+        if (!userDir.exists()) {
+            userDir.mkdir();
+        }
+
+        String filename = "mcp_readonly_" + System.currentTimeMillis() + ".py";
+        generic.jar.ResourceFile scriptFile = new generic.jar.ResourceFile(userDir, filename);
+        try (OutputStream os = scriptFile.getOutputStream()) {
+            os.write(scriptText.getBytes(StandardCharsets.UTF_8));
+        }
+        return scriptFile;
+    }
+
+    private String loadScriptTextForValidation(generic.jar.ResourceFile scriptFile) throws IOException {
+        try (java.io.InputStream is = scriptFile.getInputStream()) {
+            byte[] bytes = is.readAllBytes();
+            return new String(bytes, StandardCharsets.UTF_8);
+        }
+    }
+
+    private void validateReadonlyScriptText(String scriptText) {
+        if (scriptText == null) {
+            throw new IllegalArgumentException("script text is required");
+        }
+
+        String text = scriptText.toLowerCase(Locale.ROOT);
+        String[] blockedTokens = new String[] {
+            "starttransaction(",
+            "endtransaction(",
+            "setbytes(",
+            "createfunction(",
+            "removefunction(",
+            "setcomment(",
+            "setname(",
+            "applyto(",
+            "runcommand(",
+            "delete("};
+
+        for (String token : blockedTokens) {
+            if (text.contains(token)) {
+                throw new IllegalArgumentException("script rejected by readonly policy: token " + token);
+            }
+        }
+    }
+
     // ----------------------------------------------------------------------------------
     // Utility: parse query params, parse post params, pagination, etc.
     // ----------------------------------------------------------------------------------
@@ -1564,7 +2762,7 @@ public class GhidraMCPPlugin extends Plugin {
         String bodyStr = new String(body, StandardCharsets.UTF_8);
         Map<String, String> params = new HashMap<>();
         for (String pair : bodyStr.split("&")) {
-            String[] kv = pair.split("=");
+            String[] kv = pair.split("=", 2);
             if (kv.length == 2) {
                 // URL decode parameter values
                 try {
@@ -1604,6 +2802,20 @@ public class GhidraMCPPlugin extends Plugin {
         catch (NumberFormatException e) {
             return defaultValue;
         }
+    }
+
+    private boolean parseBooleanOrDefault(String val, boolean defaultValue) {
+        if (val == null) {
+            return defaultValue;
+        }
+        String normalized = val.trim().toLowerCase(Locale.ROOT);
+        if ("1".equals(normalized) || "true".equals(normalized) || "yes".equals(normalized)) {
+            return true;
+        }
+        if ("0".equals(normalized) || "false".equals(normalized) || "no".equals(normalized)) {
+            return false;
+        }
+        return defaultValue;
     }
 
     /**

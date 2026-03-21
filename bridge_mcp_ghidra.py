@@ -31,18 +31,21 @@ def safe_get(endpoint: str, params: dict = None) -> list:
         params = {}
 
     url = urljoin(ghidra_server_url, endpoint)
+    recap = _build_recap("GET", endpoint, params)
 
     try:
         response = requests.get(url, params=params, timeout=5)
         response.encoding = 'utf-8'
         if response.ok:
-            return response.text.splitlines()
+            lines = response.text.splitlines()
+            return [recap] + lines if lines else [recap]
         else:
-            return [f"Error {response.status_code}: {response.text.strip()}"]
+            return [recap, f"Error {response.status_code}: {response.text.strip()}"]
     except Exception as e:
-        return [f"Request failed: {str(e)}"]
+        return [recap, f"Request failed: {str(e)}"]
 
 def safe_post(endpoint: str, data: dict | str) -> str:
+    recap = _build_recap("POST", endpoint, data)
     try:
         url = urljoin(ghidra_server_url, endpoint)
         if isinstance(data, dict):
@@ -51,11 +54,109 @@ def safe_post(endpoint: str, data: dict | str) -> str:
             response = requests.post(url, data=data.encode("utf-8"), timeout=5)
         response.encoding = 'utf-8'
         if response.ok:
-            return response.text.strip()
+            body = response.text.strip()
+            return f"{recap}\n{body}" if body else recap
         else:
-            return f"Error {response.status_code}: {response.text.strip()}"
+            return f"{recap}\nError {response.status_code}: {response.text.strip()}"
     except Exception as e:
-        return f"Request failed: {str(e)}"
+        return f"{recap}\nRequest failed: {str(e)}"
+
+
+def _preview_param_value(value, max_len: int = 40) -> str:
+    text = str(value).replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _format_param_summary(payload: dict | str) -> str:
+    if payload is None:
+        return ""
+
+    if isinstance(payload, str):
+        if not payload.strip():
+            return ""
+        return f"body=\"{_preview_param_value(payload)}\""
+
+    if not isinstance(payload, dict) or not payload:
+        return ""
+
+    pieces: list[str] = []
+    for key in sorted(payload.keys()):
+        value = payload.get(key)
+        if value is None or str(value).strip() == "":
+            continue
+
+        if key in {"batch", "plan", "script_text"}:
+            length = len(str(value))
+            pieces.append(f"{key}=<{length} chars>")
+            continue
+
+        pieces.append(f"{key}={_preview_param_value(value)}")
+
+    return " ".join(pieces)
+
+
+def _build_recap(method: str, endpoint: str, payload: dict | str | None = None) -> str:
+    params = _format_param_summary(payload)
+    endpoint_text = endpoint if endpoint.startswith("/") else f"/{endpoint}"
+    if params:
+        return f"{method} {endpoint_text} {params}".strip()
+    return f"{method} {endpoint_text}"
+
+
+def _preview_text(value: str, max_len: int = 120) -> str:
+    """
+    Normalize a text field for compact tool output.
+    """
+    text = (value or "").replace("\r", " ").replace("\n", " ").strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
+
+
+def _build_batch_lines(
+    batch: list[dict[str, str]],
+    first_key: str,
+    second_key: str,
+    first_label: str,
+    second_label: str,
+) -> tuple[list[str], str | None]:
+    """
+    Convert batch entries to tab-delimited lines expected by the plugin.
+
+    Accepts either:
+    - [{first_key: "...", second_key: "..."}, ...]
+    - [["...", "..."], ...] (backward-compatible)
+    """
+    if not isinstance(batch, list):
+        return [], "Error: batch must be a list"
+
+    lines: list[str] = []
+    for index, entry in enumerate(batch):
+        a = ""
+        b = ""
+
+        if isinstance(entry, dict):
+            a = str(entry.get(first_key, "")).strip()
+            b = str(entry.get(second_key, "")).strip()
+        elif isinstance(entry, (list, tuple)) and len(entry) == 2:
+            a = str(entry[0]).strip()
+            b = str(entry[1]).strip()
+        else:
+            return [], (
+                f"Error: invalid batch item at index {index}. "
+                f"Expected object with '{first_key}' and '{second_key}', or a 2-item list"
+            )
+
+        if not a:
+            return [], f"Error: {first_label} is required for batch item at index {index}"
+        if not b:
+            return [], f"Error: {second_label} is required for batch item at index {index}"
+
+        lines.append(f"{a}\t{b}")
+
+    return lines, None
 
 @mcp.tool()
 def list_methods(offset: int = 0, limit: int = 100) -> list:
@@ -190,25 +291,228 @@ def disassemble_function(address: str) -> list:
     return safe_get("disassemble_function", {"address": address})
 
 @mcp.tool()
+def create_function_by_address(entry: str, name: str, body_start: str, body_end: str, comment: str = "") -> str:
+    """
+    Create a function with explicit entry and body bounds.
+    """
+    return safe_post("create_function_by_address", {
+        "entry": entry,
+        "name": name,
+        "body_start": body_start,
+        "body_end": body_end,
+        "comment": comment,
+    })
+
+@mcp.tool()
+def delete_function_by_address(entry: str) -> str:
+    """
+    Delete a function at the provided entry address.
+    """
+    return safe_post("delete_function_by_address", {"entry": entry})
+
+@mcp.tool()
+def get_function_containing(address: str) -> str:
+    """
+    Get the function containing the provided address.
+    """
+    return "\n".join(safe_get("get_function_containing", {"address": address}))
+
+@mcp.tool()
+def read_region(start: str, end: str) -> str:
+    """
+    Read raw bytes from memory in the range [start, end].
+    """
+    return "\n".join(safe_get("read_region", {"start": start, "end": end}))
+
+@mcp.tool()
+def disassemble_region(start: str, end: str) -> list:
+    """
+    Disassemble instructions in an arbitrary address range.
+    """
+    return safe_get("disassemble_region", {"start": start, "end": end})
+
+@mcp.tool()
+def get_instruction_window(address: str, before_count: int = 5, after_count: int = 5) -> list:
+    """
+    Dump nearby instructions around an address.
+    """
+    return safe_get("get_instruction_window", {
+        "address": address,
+        "before_count": before_count,
+        "after_count": after_count,
+    })
+
+@mcp.tool()
+def search_instructions(query: str, mode: str = "text", limit: int = 200) -> list:
+    """
+    Search instructions by rendered text, operand text, or address tokens.
+    """
+    return safe_get("search_instructions", {"query": query, "mode": mode, "limit": limit})
+
+@mcp.tool()
+def get_data_uses(address: str, include_operand_scans: bool = True, limit: int = 200) -> list:
+    """
+    Get data-address uses from reference manager plus optional instruction scans.
+    """
+    return safe_get("get_data_uses", {
+        "address": address,
+        "include_operand_scans": str(include_operand_scans).lower(),
+        "limit": limit,
+    })
+
+@mcp.tool()
+def set_comments(batch: list[dict[str, str]]) -> str:
+    """
+    Set disassembly comments in batch.
+
+    Input format: [{"address": "...", "comment": "..."}, ...]
+    """
+    lines, error = _build_batch_lines(batch, "address", "comment", "address", "comment")
+    if error:
+        return error
+
+    result = safe_post("set_comments", {"batch": "\n".join(lines)})
+    return f"Set disassembly comments: items={len(lines)}\n{result}"
+
+@mcp.tool()
+def set_decompiler_comments(batch: list[dict[str, str]]) -> str:
+    """
+    Set decompiler comments in batch.
+
+    Input format: [{"address": "...", "comment": "..."}, ...]
+    """
+    lines, error = _build_batch_lines(batch, "address", "comment", "address", "comment")
+    if error:
+        return error
+
+    result = safe_post("set_decompiler_comments", {"batch": "\n".join(lines)})
+    return f"Set decompiler comments: items={len(lines)}\n{result}"
+
+@mcp.tool()
+def rename_functions_by_address(batch: list[dict[str, str]]) -> str:
+    """
+    Batch rename functions by address.
+
+    Input format: [{"function_address": "...", "new_name": "..."}, ...]
+    """
+    lines, error = _build_batch_lines(
+        batch,
+        "function_address",
+        "new_name",
+        "function_address",
+        "new_name",
+    )
+    if error:
+        return error
+
+    result = safe_post("rename_functions_by_address", {"batch": "\n".join(lines)})
+    return f"Rename functions by address: items={len(lines)}\n{result}"
+
+@mcp.tool()
+def apply_program_edit_plan(plan: str, dry_run: bool = False) -> str:
+    """
+    Apply a simple line-oriented edit plan.
+
+    Supported actions:
+    - create_function_by_address|entry|name|body_start|body_end|comment(optional)
+    - delete_function_by_address|entry
+    - rename_function_by_address|address|new_name
+    - set_disassembly_comment|address|comment
+    - set_decompiler_comment|address|comment
+    """
+    return safe_post("apply_program_edit_plan", {
+        "plan": plan,
+        "dry_run": str(dry_run).lower(),
+    })
+
+@mcp.tool()
+def reanalyze_region(start: str, end: str) -> str:
+    """
+    Trigger an analysis pass after edits touching a region.
+    """
+    return safe_post("reanalyze_region", {"start": start, "end": end})
+
+@mcp.tool()
+def patch_bytes_and_reanalyze(start: str, bytes: str, comment: str = "") -> str:
+    """
+    Patch bytes at start address and trigger reanalysis.
+
+    bytes format: "90 90 90" or "0x90 0x90 0x90"
+    """
+    return safe_post("patch_bytes_and_reanalyze", {
+        "start": start,
+        "bytes": bytes,
+        "comment": comment,
+    })
+
+@mcp.tool()
+def analyze_function_boundaries(start: str, end: str) -> list:
+    """
+    Inspect a range for overlaps and likely candidate function entries.
+    """
+    return safe_get("analyze_function_boundaries", {"start": start, "end": end})
+
+@mcp.tool()
+def get_project_access_info() -> str:
+    """
+    Get metadata about current program/project read-only and writable state.
+    """
+    return "\n".join(safe_get("get_project_access_info"))
+
+@mcp.tool()
+def open_current_program_readonly(version: int = -1, make_current: bool = True) -> str:
+    """
+    Open a read-only program object for the currently loaded domain file.
+    """
+    return safe_post("open_current_program_readonly", {
+        "version": str(version),
+        "make_current": str(make_current).lower(),
+    })
+
+@mcp.tool()
+def run_readonly_script(script_path: str = "", script_text: str = "") -> str:
+    """
+    Run a constrained read-only Ghidra script by path or inline script text.
+    """
+    return safe_post("run_readonly_script", {
+        "script_path": script_path,
+        "script_text": script_text,
+    })
+
+@mcp.tool()
 def set_decompiler_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function pseudocode.
     """
-    return safe_post("set_decompiler_comment", {"address": address, "comment": comment})
+    result = safe_post("set_decompiler_comment", {"address": address, "comment": comment})
+    return (
+        f"Set decompiler comment at {address}\n"
+        f"comment=\"{_preview_text(comment)}\"\n"
+        f"{result}"
+    )
 
 @mcp.tool()
 def set_disassembly_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function disassembly.
     """
-    return safe_post("set_disassembly_comment", {"address": address, "comment": comment})
+    result = safe_post("set_disassembly_comment", {"address": address, "comment": comment})
+    return (
+        f"Set disassembly comment at {address}\n"
+        f"comment=\"{_preview_text(comment)}\"\n"
+        f"{result}"
+    )
 
 @mcp.tool()
 def rename_function_by_address(function_address: str, new_name: str) -> str:
     """
     Rename a function by its address.
     """
-    return safe_post("rename_function_by_address", {"function_address": function_address, "new_name": new_name})
+    result = safe_post("rename_function_by_address", {"function_address": function_address, "new_name": new_name})
+    return (
+        f"Rename function at {function_address} -> {new_name}\n"
+        f"{result}"
+    )
 
 @mcp.tool()
 def set_function_prototype(function_address: str, prototype: str) -> str:
@@ -237,7 +541,11 @@ def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
     Returns:
         List of references to the specified address
     """
-    return safe_get("xrefs_to", {"address": address, "offset": offset, "limit": limit})
+    params = {"address": address, "offset": offset, "limit": limit}
+    result = safe_get("get_xrefs_to", params)
+    if len(result) > 1 and result[1].startswith("Error 404"):
+        return safe_get("xrefs_to", params)
+    return result
 
 @mcp.tool()
 def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
@@ -252,7 +560,11 @@ def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
     Returns:
         List of references from the specified address
     """
-    return safe_get("xrefs_from", {"address": address, "offset": offset, "limit": limit})
+    params = {"address": address, "offset": offset, "limit": limit}
+    result = safe_get("get_xrefs_from", params)
+    if len(result) > 1 and result[1].startswith("Error 404"):
+        return safe_get("xrefs_from", params)
+    return result
 
 @mcp.tool()
 def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
