@@ -11,6 +11,8 @@
 # ghidraMCP
 ghidraMCP is an Model Context Protocol server for allowing LLMs to autonomously reverse engineer applications. It exposes numerous tools from core Ghidra functionality to MCP clients.
 
+See [ghidra_mcp_tool_reference.md](ghidra_mcp_tool_reference.md) for a detailed tool-by-tool reference, including the newer batch-edit, xref, and read-only workflow helpers.
+
 https://github.com/user-attachments/assets/36080514-f227-44bd-af84-78e29ee1d7f9
 
 
@@ -99,7 +101,7 @@ Another MCP client that supports multiple models on the backend is [5ire](https:
 3. Command: `python /ABSOLUTE_PATH_TO/bridge_mcp_ghidra.py`
 
 # Building from Source
-1. Copy the following files from your Ghidra directory to this project's `lib/` directory:
+1. Copy the following files from your Ghidra directory to this project's `lib/` directory. On Windows, you can run `copy_ghidra_libs.bat` with your Ghidra installation path, or run it without arguments and enter the path when prompted:
 - `Ghidra/Features/Base/lib/Base.jar`
 - `Ghidra/Features/Decompiler/lib/Decompiler.jar`
 - `Ghidra/Framework/Docking/lib/Docking.jar`
