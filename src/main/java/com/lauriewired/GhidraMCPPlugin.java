@@ -83,6 +83,7 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+    private volatile Program lastKnownProgram;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -151,6 +152,30 @@ public class GhidraMCPPlugin extends Plugin {
         });
 
         server.createContext("/get_symbol_at", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/symbol_at", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/getSymbolAt", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/symbolAt", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/get_symbol", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
             sendResponse(exchange, getSymbolAt(address));
@@ -2913,9 +2938,85 @@ public class GhidraMCPPlugin extends Plugin {
         return sb.toString();
     }
 
-    public Program getCurrentProgram() {
+    private Program getFirstOpenProgram(ProgramManager pm) {
+        if (pm == null) {
+            return null;
+        }
+
+        try {
+            Object openPrograms = ProgramManager.class.getMethod("getAllOpenPrograms").invoke(pm);
+            if (openPrograms instanceof Program[]) {
+                Program[] programs = (Program[]) openPrograms;
+                for (Program program : programs) {
+                    if (program != null) {
+                        return program;
+                    }
+                }
+            }
+            else if (openPrograms instanceof Collection<?>) {
+                Collection<?> programs = (Collection<?>) openPrograms;
+                for (Object candidate : programs) {
+                    if (candidate instanceof Program) {
+                        return (Program) candidate;
+                    }
+                }
+            }
+        }
+        catch (ReflectiveOperationException e) {
+            Msg.debug(this, "ProgramManager#getAllOpenPrograms unavailable", e);
+        }
+
+        return null;
+    }
+
+    private Program resolveCurrentProgramOnSwingThread() {
         ProgramManager pm = tool.getService(ProgramManager.class);
-        return pm != null ? pm.getCurrentProgram() : null;
+        if (pm != null) {
+            Program current = pm.getCurrentProgram();
+            if (current != null) {
+                lastKnownProgram = current;
+                return current;
+            }
+        }
+
+        CodeViewerService codeViewer = tool.getService(CodeViewerService.class);
+        if (codeViewer != null) {
+            ProgramLocation location = codeViewer.getCurrentLocation();
+            if (location != null && location.getProgram() != null) {
+                lastKnownProgram = location.getProgram();
+                return location.getProgram();
+            }
+        }
+
+        Program openProgram = getFirstOpenProgram(pm);
+        if (openProgram != null) {
+            lastKnownProgram = openProgram;
+            return openProgram;
+        }
+
+        return lastKnownProgram;
+    }
+
+    public Program getCurrentProgram() {
+        AtomicReference<Program> programRef = new AtomicReference<>();
+
+        try {
+            if (SwingUtilities.isEventDispatchThread()) {
+                programRef.set(resolveCurrentProgramOnSwingThread());
+            }
+            else {
+                SwingUtilities.invokeAndWait(() -> programRef.set(resolveCurrentProgramOnSwingThread()));
+            }
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Msg.error(this, "Interrupted while resolving current program", e);
+        }
+        catch (InvocationTargetException e) {
+            Msg.error(this, "Failed to resolve current program on Swing thread", e);
+        }
+
+        return programRef.get();
     }
 
     private void sendResponse(HttpExchange exchange, String response) throws IOException {
