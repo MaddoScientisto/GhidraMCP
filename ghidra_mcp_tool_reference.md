@@ -27,7 +27,7 @@ These are the original read-oriented tools and the basic rename helpers.
 | `list_classes` | Lists non-global namespace/class names. | `offset`, `limit` | Useful for understanding type and namespace layout. |
 | `decompile_function` | Decompiles a function by name and returns C-like output. | `name` | Legacy name-based decompile entry point. |
 | `rename_function` | Renames a function by its current name. | `old_name`, `new_name` | Older API; address-based rename is more reliable. |
-| `rename_data` | Renames a data label at a specific address. | `address`, `new_name` | Creates a label if one does not already exist. |
+| `rename_data` | Renames or creates the primary symbol at a specific address. | `address`, `new_name` | Returns the resolved symbol details so callers can verify the rename directly. |
 | `list_segments` | Lists memory blocks / segments. | `offset`, `limit` | Helpful for mapping the loaded image. |
 | `list_imports` | Lists imported symbols. | `offset`, `limit` | Shows external symbols and their addresses. |
 | `list_exports` | Lists exported symbols and entry points. | `offset`, `limit` | Useful for quickly finding top-level entry points. |
@@ -52,6 +52,7 @@ These tools make it easier to move from a coarse inventory to a specific functio
 | `read_region` | Reads raw bytes from memory for an address range. | `start`, `end` | Useful before patching or decoding data. |
 | `disassemble_region` | Disassembles an arbitrary address range. | `start`, `end` | Helps inspect code in ranges that are not yet functions. |
 | `get_instruction_window` | Returns nearby instructions around an address. | `address`, `before_count`, `after_count` | Very useful for local context around a target. |
+| `get_symbol_at` | Returns the current primary symbol state at an address. | `address` | Useful for verifying data-label changes without relying on decompiler refresh. |
 | `search_instructions` | Searches instruction text, operands, or address tokens. | `query`, `mode`, `limit` | Good for finding patterns across code. |
 
 ## Xref And Usage Tools
@@ -115,6 +116,7 @@ These are the tools that materially improve reverse-engineering workflow compare
 | `get_project_access_info` | Tells clients whether the current program state supports edits. |
 | `open_current_program_readonly` | Gives clients a safe read-only mode for inspection-only workflows. |
 | `run_readonly_script` | Enables controlled script-based inspection without full write access. |
+| `get_symbol_at` | Gives callers a fast readback path after `rename_data` or manual label work. |
 | `set_function_prototype` / `set_local_variable_type` | Improves decompiler quality after type recovery. |
 | `rename_function_by_address` | Avoids ambiguity and is the preferred rename path for verified mappings. |
 
@@ -122,6 +124,7 @@ These are the tools that materially improve reverse-engineering workflow compare
 
 - `get_xrefs_to` and `get_xrefs_from` first try the newer get-prefixed endpoints and then fall back to the older `xrefs_to` / `xrefs_from` routes if needed.
 - `rename_function_by_address` is the preferred address-based rename path. It is safer than the older name-based `rename_function` when you already know the function entry address.
+- `rename_data` now reports the resolved symbol metadata, and `get_symbol_at` can be used to verify address labels directly when decompiler output lags behind symbol-table updates.
 - Batch-oriented tools accept simple list-like payloads so they can be called repeatedly without constructing many separate requests.
 
 ## Practical Usage Order

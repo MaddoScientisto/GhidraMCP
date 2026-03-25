@@ -11,6 +11,8 @@
 # ghidraMCP
 ghidraMCP is an Model Context Protocol server for allowing LLMs to autonomously reverse engineer applications. It exposes numerous tools from core Ghidra functionality to MCP clients.
 
+This fork is currently pinned and validated against Ghidra 12.0.4 (build date 20260303).
+
 See [ghidra_mcp_tool_reference.md](ghidra_mcp_tool_reference.md) for a detailed tool-by-tool reference, including the newer batch-edit, xref, and read-only workflow helpers.
 
 https://github.com/user-attachments/assets/36080514-f227-44bd-af84-78e29ee1d7f9

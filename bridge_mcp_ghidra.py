@@ -10,6 +10,7 @@ import sys
 import requests
 import argparse
 import logging
+import re
 from urllib.parse import urljoin
 
 from mcp.server.fastmcp import FastMCP
@@ -62,6 +63,158 @@ def safe_post(endpoint: str, data: dict | str) -> str:
         return f"{recap}\nRequest failed: {str(e)}"
 
 
+def _response_has_http_404(result: list[str] | str) -> bool:
+    if isinstance(result, list):
+        return any("Error 404" in line for line in result)
+    return "Error 404" in str(result)
+
+
+def _escape_script_string(value: str) -> str:
+    return value.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _symbol_lookup_via_readonly_script(address: str) -> str:
+    escaped_address = _escape_script_string(address)
+    script_text = f"""
+addr_text = \"{escaped_address}\"
+program = currentProgram
+if program is None:
+    print("failed: get_symbol_at no program loaded")
+else:
+    addr = program.getAddressFactory().getAddress(addr_text)
+    if addr is None and addr_text.lower().startswith("0x"):
+        addr = program.getAddressFactory().getAddress(addr_text[2:])
+    if addr is None:
+        print("failed: get_symbol_at invalid address=" + addr_text)
+    else:
+        symbol = program.getSymbolTable().getPrimarySymbol(addr)
+        has_data = program.getListing().getDefinedDataAt(addr) is not None
+        if symbol is None:
+            print("ok: get_symbol_at address=" + str(addr) + " symbol=<none> defined_data=" + str(has_data))
+        else:
+            print(
+                "ok: get_symbol_at address=" + str(addr) +
+                " symbol=" + symbol.getName() +
+                " source=" + str(symbol.getSource()) +
+                " symbol_type=" + str(symbol.getSymbolType()) +
+                " defined_data=" + str(has_data)
+            )
+""".strip()
+
+    return safe_post("run_readonly_script", {"script_text": script_text})
+
+
+def _normalized_address_candidates(address: str) -> set[str]:
+    value = (address or "").strip()
+    if not value:
+        return set()
+
+    candidates: set[str] = {value, value.lower(), value.upper()}
+
+    match_seg = re.fullmatch(r"([0-9a-fA-F]{1,4}):([0-9a-fA-F]{1,4})", value)
+    if match_seg:
+        seg = match_seg.group(1).zfill(4)
+        off = match_seg.group(2).zfill(4)
+        combined = f"{seg}:{off}"
+        candidates.update({combined, combined.lower(), combined.upper()})
+        return candidates
+
+    match_hex = re.fullmatch(r"(?:0x)?([0-9a-fA-F]+)", value)
+    if match_hex:
+        number = int(match_hex.group(1), 16)
+        if number <= 0xFFFF:
+            off = f"{number:04x}"
+            seg_off = f"0000:{off}"
+            candidates.update({off, off.upper(), f"0x{number:x}", f"0x{number:X}", seg_off, seg_off.upper()})
+
+    return candidates
+
+
+def _symbol_lookup_via_legacy_endpoints(address: str) -> str | None:
+    candidates = _normalized_address_candidates(address)
+    if not candidates:
+        return None
+
+    function_endpoint_reachable = False
+    data_endpoint_reachable = False
+
+    # Try function metadata first because it is cheap and specific.
+    for candidate in candidates:
+        function_result = safe_get("get_function_by_address", {"address": candidate})
+        if _response_has_http_404(function_result):
+            continue
+        function_endpoint_reachable = True
+
+        body_lines = function_result[1:]
+        if any(line.startswith("Function:") for line in body_lines):
+            function_line = next(line for line in body_lines if line.startswith("Function:"))
+            match = re.match(r"Function:\s+(.*?)\s+at\s+(.+)$", function_line)
+            if match:
+                function_name = match.group(1).strip()
+                resolved = match.group(2).strip()
+                return (
+                    f"ok: get_symbol_at address={resolved} symbol={function_name} "
+                    "source=legacy_function_lookup symbol_type=FUNCTION defined_data=false"
+                )
+
+            return "\n".join(function_result)
+
+    # Fall back to paged data-list scan to recover data labels from old servers.
+    address_matchers = set()
+    for candidate in candidates:
+        address_matchers.add(candidate.lower())
+        if ":" not in candidate and len(candidate) <= 4 and re.fullmatch(r"[0-9a-fA-F]{1,4}", candidate):
+            address_matchers.add(f"0000:{candidate.zfill(4).lower()}")
+
+    offset = 0
+    limit = 200
+    max_pages = 40
+
+    for _ in range(max_pages):
+        data_result = safe_get("data", {"offset": offset, "limit": limit})
+        if _response_has_http_404(data_result):
+            break
+        data_endpoint_reachable = True
+
+        lines = data_result[1:]
+        if not lines:
+            break
+
+        for line in lines:
+            match = re.match(r"^([0-9a-fA-F]{4}:[0-9a-fA-F]{4}):\s*(.*?)\s*=\s*(.*)$", line)
+            if not match:
+                continue
+
+            resolved_addr = match.group(1)
+            symbol_name = match.group(2).strip()
+            if resolved_addr.lower() not in address_matchers:
+                continue
+
+            if symbol_name == "(unnamed)":
+                return (
+                    f"ok: get_symbol_at address={resolved_addr} symbol=<none> "
+                    "source=legacy_data_scan symbol_type=DATA defined_data=true"
+                )
+
+            return (
+                f"ok: get_symbol_at address={resolved_addr} symbol={symbol_name} "
+                "source=legacy_data_scan symbol_type=DATA defined_data=true"
+            )
+
+        if len(lines) < limit:
+            break
+        offset += limit
+
+    if function_endpoint_reachable or data_endpoint_reachable:
+        normalized = sorted(candidates)[0]
+        return (
+            f"ok: get_symbol_at address={normalized} symbol=<none> "
+            "source=legacy_inference symbol_type=UNKNOWN defined_data=false"
+        )
+
+    return None
+
+
 def _preview_param_value(value, max_len: int = 40) -> str:
     text = str(value).replace("\r", " ").replace("\n", " ").strip()
     if len(text) <= max_len:
@@ -103,6 +256,25 @@ def _build_recap(method: str, endpoint: str, payload: dict | str | None = None) 
     if params:
         return f"{method} {endpoint_text} {params}".strip()
     return f"{method} {endpoint_text}"
+
+
+def _with_target_params(
+    payload: dict | None,
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> dict:
+    data = dict(payload or {})
+    if project_dir.strip():
+        data["project_dir"] = project_dir.strip()
+    if project_name.strip():
+        data["project_name"] = project_name.strip()
+    if folder_path.strip():
+        data["folder_path"] = folder_path.strip()
+    if program_name.strip():
+        data["program_name"] = program_name.strip()
+    return data
 
 
 def _preview_text(value: str, max_len: int = 120) -> str:
@@ -189,9 +361,50 @@ def rename_function(old_name: str, new_name: str) -> str:
 @mcp.tool()
 def rename_data(address: str, new_name: str) -> str:
     """
-    Rename a data label at the specified address.
+    Rename or create the primary symbol at the specified address.
     """
-    return safe_post("renameData", {"address": address, "newName": new_name})
+    result = safe_post("renameData", {"address": address, "newName": new_name})
+    return (
+        f"Rename data at {address} -> {new_name}\n"
+        f"{result}"
+    )
+
+@mcp.tool()
+def get_symbol_at(address: str) -> str:
+    """
+    Get the current primary symbol state at an address.
+    """
+    params = {"address": address}
+    for endpoint in ("get_symbol_at", "symbol_at", "getSymbolAt", "symbolAt", "get_symbol"):
+        result = safe_get(endpoint, params)
+        if not _response_has_http_404(result):
+            return "\n".join(result)
+
+    legacy_result = _symbol_lookup_via_legacy_endpoints(address)
+    if legacy_result is not None:
+        return (
+            "Primary symbol endpoints unavailable; using legacy endpoint fallback\n"
+            f"{legacy_result}"
+        )
+
+    script_result = _symbol_lookup_via_readonly_script(address)
+    if "Failed to run readonly script: Ghidra was not started with PyGhidra" in script_result:
+        return (
+            "Primary symbol endpoints unavailable and readonly-script fallback cannot run without PyGhidra. "
+            "Reload the updated GhidraMCP plugin build to enable direct get_symbol_at routes.\n"
+            f"{script_result}"
+        )
+
+    if "Error 404" not in script_result and "Request failed:" not in script_result:
+        return (
+            "Primary symbol endpoints unavailable; using run_readonly_script fallback\n"
+            f"{script_result}"
+        )
+
+    return (
+        "failed: get_symbol_at symbol routes unavailable and no compatible fallback succeeded\n"
+        f"{script_result}"
+    )
 
 @mcp.tool()
 def list_segments(offset: int = 0, limit: int = 100) -> list:
@@ -409,7 +622,14 @@ def rename_functions_by_address(batch: list[dict[str, str]]) -> str:
     return f"Rename functions by address: items={len(lines)}\n{result}"
 
 @mcp.tool()
-def apply_program_edit_plan(plan: str, dry_run: bool = False) -> str:
+def apply_program_edit_plan(
+    plan: str,
+    dry_run: bool = False,
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> str:
     """
     Apply a simple line-oriented edit plan.
 
@@ -419,11 +639,14 @@ def apply_program_edit_plan(plan: str, dry_run: bool = False) -> str:
     - rename_function_by_address|address|new_name
     - set_disassembly_comment|address|comment
     - set_decompiler_comment|address|comment
+
+    Optional explicit target selectors:
+    - project_dir, project_name, folder_path, program_name
     """
-    return safe_post("apply_program_edit_plan", {
+    return safe_post("apply_program_edit_plan", _with_target_params({
         "plan": plan,
         "dry_run": str(dry_run).lower(),
-    })
+    }, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def reanalyze_region(start: str, end: str) -> str:
@@ -433,17 +656,28 @@ def reanalyze_region(start: str, end: str) -> str:
     return safe_post("reanalyze_region", {"start": start, "end": end})
 
 @mcp.tool()
-def patch_bytes_and_reanalyze(start: str, bytes: str, comment: str = "") -> str:
+def patch_bytes_and_reanalyze(
+    start: str,
+    bytes: str,
+    comment: str = "",
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> str:
     """
     Patch bytes at start address and trigger reanalysis.
 
     bytes format: "90 90 90" or "0x90 0x90 0x90"
+
+    Optional explicit target selectors:
+    - project_dir, project_name, folder_path, program_name
     """
-    return safe_post("patch_bytes_and_reanalyze", {
+    return safe_post("patch_bytes_and_reanalyze", _with_target_params({
         "start": start,
         "bytes": bytes,
         "comment": comment,
-    })
+    }, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def analyze_function_boundaries(start: str, end: str) -> list:
@@ -460,9 +694,16 @@ def get_project_access_info() -> str:
     return "\n".join(safe_get("get_project_access_info"))
 
 @mcp.tool()
+def get_runtime_capabilities() -> str:
+    """
+    Report runtime capabilities, including readonly-script support state.
+    """
+    return "\n".join(safe_get("get_runtime_capabilities"))
+
+@mcp.tool()
 def open_current_program_readonly(version: int = -1, make_current: bool = True) -> str:
     """
-    Open a read-only program object for the currently loaded domain file.
+    Deprecated: MCP no longer opens programs in read-only mode.
     """
     return safe_post("open_current_program_readonly", {
         "version": str(version),
@@ -543,7 +784,7 @@ def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
     """
     params = {"address": address, "offset": offset, "limit": limit}
     result = safe_get("get_xrefs_to", params)
-    if len(result) > 1 and result[1].startswith("Error 404"):
+    if _response_has_http_404(result):
         return safe_get("xrefs_to", params)
     return result
 
@@ -562,7 +803,7 @@ def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
     """
     params = {"address": address, "offset": offset, "limit": limit}
     result = safe_get("get_xrefs_from", params)
-    if len(result) > 1 and result[1].startswith("Error 404"):
+    if _response_has_http_404(result):
         return safe_get("xrefs_from", params)
     return result
 

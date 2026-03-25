@@ -68,6 +68,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 @PluginInfo(
     status = PluginStatus.RELEASED,
@@ -82,6 +83,7 @@ public class GhidraMCPPlugin extends Plugin {
     private static final String OPTION_CATEGORY_NAME = "GhidraMCP HTTP Server";
     private static final String PORT_OPTION_NAME = "Server Port";
     private static final int DEFAULT_PORT = 8080;
+    private volatile Program lastKnownProgram;
 
     public GhidraMCPPlugin(PluginTool tool) {
         super(tool);
@@ -146,8 +148,37 @@ public class GhidraMCPPlugin extends Plugin {
 
         server.createContext("/renameData", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
-            renameDataAtAddress(params.get("address"), params.get("newName"));
-            sendResponse(exchange, "Rename data attempted");
+            sendResponse(exchange, renameDataAtAddress(params.get("address"), params.get("newName")));
+        });
+
+        server.createContext("/get_symbol_at", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/symbol_at", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/getSymbolAt", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/symbolAt", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
+        });
+
+        server.createContext("/get_symbol", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            sendResponse(exchange, getSymbolAt(address));
         });
 
         server.createContext("/renameVariable", exchange -> {
@@ -459,7 +490,7 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> params = parsePostParams(exchange);
             String plan = params.get("plan");
             boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
-            sendResponse(exchange, applyProgramEditPlan(plan, dryRun));
+            sendResponse(exchange, applyProgramEditPlan(plan, dryRun, params));
         });
 
         server.createContext("/reanalyze_region", exchange -> {
@@ -474,7 +505,7 @@ public class GhidraMCPPlugin extends Plugin {
             String start = params.get("start");
             String bytes = params.get("bytes");
             String comment = params.get("comment");
-            sendResponse(exchange, patchBytesAndReanalyze(start, bytes, comment));
+            sendResponse(exchange, patchBytesAndReanalyze(start, bytes, comment, params));
         });
 
         server.createContext("/analyze_function_boundaries", exchange -> {
@@ -486,6 +517,14 @@ public class GhidraMCPPlugin extends Plugin {
 
         server.createContext("/get_project_access_info", exchange -> {
             sendResponse(exchange, getProjectAccessInfo());
+        });
+
+        server.createContext("/get_runtime_capabilities", exchange -> {
+            sendResponse(exchange, getRuntimeCapabilities());
+        });
+
+        server.createContext("/runtime_capabilities", exchange -> {
+            sendResponse(exchange, getRuntimeCapabilities());
         });
 
         server.createContext("/open_current_program_readonly", exchange -> {
@@ -701,38 +740,109 @@ public class GhidraMCPPlugin extends Plugin {
         return successFlag.get();
     }
 
-    private void renameDataAtAddress(String addressStr, String newName) {
+    private String renameDataAtAddress(String addressStr, String newName) {
         Program program = getCurrentProgram();
-        if (program == null) return;
+        if (program == null) return "failed: rename_data no program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "failed: rename_data address is required";
+        if (newName == null || newName.isBlank()) return "failed: rename_data new_name is required";
+
+        AtomicBoolean success = new AtomicBoolean(false);
+        AtomicReference<String> result = new AtomicReference<>("failed: rename_data unknown error");
 
         try {
             SwingUtilities.invokeAndWait(() -> {
                 int tx = program.startTransaction("Rename data");
                 try {
                     Address addr = program.getAddressFactory().getAddress(addressStr);
-                    Listing listing = program.getListing();
-                    Data data = listing.getDefinedDataAt(addr);
-                    if (data != null) {
-                        SymbolTable symTable = program.getSymbolTable();
-                        Symbol symbol = symTable.getPrimarySymbol(addr);
-                        if (symbol != null) {
-                            symbol.setName(newName, SourceType.USER_DEFINED);
-                        } else {
-                            symTable.createLabel(addr, newName, SourceType.USER_DEFINED);
-                        }
+                    if (addr == null) {
+                        result.set("failed: rename_data invalid address=" + safeValueForResponse(addressStr));
+                        return;
+                    }
+
+                    SymbolTable symTable = program.getSymbolTable();
+                    Symbol symbol = symTable.getPrimarySymbol(addr);
+                    String previousName = symbol != null ? symbol.getName() : "";
+
+                    if (symbol != null) {
+                        symbol.setName(newName, SourceType.USER_DEFINED);
+                    } else {
+                        symTable.createLabel(addr, newName, SourceType.USER_DEFINED);
+                    }
+
+                    Symbol resolved = symTable.getPrimarySymbol(addr);
+                    boolean hasDefinedData = program.getListing().getDefinedDataAt(addr) != null;
+                    if (resolved != null && newName.equals(resolved.getName())) {
+                        success.set(true);
+                        result.set(
+                            "ok: rename_data address=" + safeValueForResponse(addr.toString()) +
+                            " new_name=" + safeValueForResponse(newName) +
+                            " resolved_symbol=" + safeValueForResponse(resolved.getName()) +
+                            " source=" + safeValueForResponse(resolved.getSource().toString()) +
+                            " symbol_type=" + safeValueForResponse(resolved.getSymbolType().toString()) +
+                            " defined_data=" + hasDefinedData +
+                            (previousName.isBlank() || previousName.equals(newName)
+                                ? ""
+                                : " previous_name=" + safeValueForResponse(previousName))
+                        );
+                    } else {
+                        result.set(
+                            "failed: rename_data address=" + safeValueForResponse(addr.toString()) +
+                            " requested_name=" + safeValueForResponse(newName) +
+                            " resolved_symbol=" + safeValueForResponse(resolved != null ? resolved.getName() : "<none>") +
+                            " defined_data=" + hasDefinedData
+                        );
                     }
                 }
                 catch (Exception e) {
                     Msg.error(this, "Rename data error", e);
+                    result.set(
+                        "failed: rename_data address=" + safeValueForResponse(addressStr) +
+                        " new_name=" + safeValueForResponse(newName) +
+                        " error=" + safeValueForResponse(e.getMessage())
+                    );
                 }
                 finally {
-                    program.endTransaction(tx, true);
+                    boolean committed = program.endTransaction(tx, success.get());
+                    if (!committed && result.get().startsWith("ok:")) {
+                        result.set(
+                            "failed: rename_data address=" + safeValueForResponse(addressStr) +
+                            " new_name=" + safeValueForResponse(newName) +
+                            " error=transaction did not commit"
+                        );
+                    }
                 }
             });
         }
         catch (InterruptedException | InvocationTargetException e) {
             Msg.error(this, "Failed to execute rename data on Swing thread", e);
+            return "failed: rename_data address=" + safeValueForResponse(addressStr) +
+                " new_name=" + safeValueForResponse(newName) +
+                " error=" + safeValueForResponse(e.getMessage());
         }
+
+        return result.get();
+    }
+
+    private String getSymbolAt(String addressStr) {
+        Program program = getCurrentProgram();
+        if (program == null) return "failed: get_symbol_at no program loaded";
+        if (addressStr == null || addressStr.isBlank()) return "failed: get_symbol_at address is required";
+
+        Address addr = program.getAddressFactory().getAddress(addressStr);
+        if (addr == null) return "failed: get_symbol_at invalid address=" + safeValueForResponse(addressStr);
+
+        Symbol symbol = program.getSymbolTable().getPrimarySymbol(addr);
+        boolean hasDefinedData = program.getListing().getDefinedDataAt(addr) != null;
+        if (symbol == null) {
+            return "ok: get_symbol_at address=" + safeValueForResponse(addr.toString()) +
+                " symbol=<none> defined_data=" + hasDefinedData;
+        }
+
+        return "ok: get_symbol_at address=" + safeValueForResponse(addr.toString()) +
+            " symbol=" + safeValueForResponse(symbol.getName()) +
+            " source=" + safeValueForResponse(symbol.getSource().toString()) +
+            " symbol_type=" + safeValueForResponse(symbol.getSymbolType().toString()) +
+            " defined_data=" + hasDefinedData;
     }
 
     private String renameVariableInFunction(String functionName, String oldVarName, String newVarName) {
@@ -1037,9 +1147,378 @@ public class GhidraMCPPlugin extends Plugin {
         return normalized.substring(0, 117) + "...";
     }
 
+    private static class ProgramTargetContext {
+        private final Program program;
+        private final Object ghidraProjectHandle;
+        private final ghidra.framework.model.DomainFile domainFile;
+        private final boolean explicitTarget;
+        private final String targetSummary;
+        private final String errorMessage;
+
+        private ProgramTargetContext(Program program, Object ghidraProjectHandle,
+                                     ghidra.framework.model.DomainFile domainFile,
+                                     boolean explicitTarget, String targetSummary,
+                                     String errorMessage) {
+            this.program = program;
+            this.ghidraProjectHandle = ghidraProjectHandle;
+            this.domainFile = domainFile;
+            this.explicitTarget = explicitTarget;
+            this.targetSummary = targetSummary;
+            this.errorMessage = errorMessage;
+        }
+
+        private static ProgramTargetContext current(Program program, String targetSummary) {
+            return new ProgramTargetContext(program, null, program.getDomainFile(), false, targetSummary, null);
+        }
+
+        private static ProgramTargetContext explicit(Program program, Object ghidraProjectHandle,
+                                                     ghidra.framework.model.DomainFile domainFile,
+                                                     String targetSummary) {
+            return new ProgramTargetContext(program, ghidraProjectHandle, domainFile, true, targetSummary, null);
+        }
+
+        private static ProgramTargetContext error(String errorMessage) {
+            return new ProgramTargetContext(null, null, null, false, "", errorMessage);
+        }
+
+        private boolean hasError() {
+            return errorMessage != null && !errorMessage.isBlank();
+        }
+    }
+
+    private static class OperationResult {
+        private final boolean success;
+        private final String message;
+
+        private OperationResult(boolean success, String message) {
+            this.success = success;
+            this.message = message;
+        }
+    }
+
+    private static class ReadonlyScriptCapability {
+        private final boolean supported;
+        private final String status;
+        private final String reason;
+        private final String detail;
+
+        private ReadonlyScriptCapability(boolean supported, String status, String reason, String detail) {
+            this.supported = supported;
+            this.status = status;
+            this.reason = reason;
+            this.detail = detail;
+        }
+    }
+
+    private String trimToNull(String value) {
+        if (value == null) {
+            return null;
+        }
+        String trimmed = value.trim();
+        return trimmed.isEmpty() ? null : trimmed;
+    }
+
+    private String normalizeFolderPath(String folderPath) {
+        String normalized = trimToNull(folderPath);
+        if (normalized == null) {
+            return "/";
+        }
+        normalized = normalized.replace('\\', '/');
+        if (!normalized.startsWith("/")) {
+            normalized = "/" + normalized;
+        }
+        if (normalized.length() > 1 && normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized;
+    }
+
+    private boolean hasExplicitTargetSelectors(Map<String, String> params) {
+        if (params == null || params.isEmpty()) {
+            return false;
+        }
+        return trimToNull(params.get("project_dir")) != null ||
+            trimToNull(params.get("project_name")) != null ||
+            trimToNull(params.get("folder_path")) != null ||
+            trimToNull(params.get("program_name")) != null;
+    }
+
+    private Throwable unwrapReflectionFailure(Exception e) {
+        if (e instanceof InvocationTargetException) {
+            Throwable cause = ((InvocationTargetException) e).getCause();
+            if (cause != null) {
+                return cause;
+            }
+        }
+        return e;
+    }
+
+    private Object openExplicitProjectHandle(String projectDir, String projectName) throws Exception {
+        Class<?> ghidraProjectClass = Class.forName("ghidra.base.project.GhidraProject");
+        return ghidraProjectClass.getMethod("openProject", String.class, String.class)
+            .invoke(null, projectDir, projectName);
+    }
+
+    private ghidra.framework.model.ProjectData getProjectDataFromHandle(Object ghidraProjectHandle) {
+        if (ghidraProjectHandle == null) {
+            return null;
+        }
+        try {
+            Object projectData = ghidraProjectHandle.getClass().getMethod("getProjectData").invoke(ghidraProjectHandle);
+            return projectData instanceof ghidra.framework.model.ProjectData
+                ? (ghidra.framework.model.ProjectData) projectData
+                : null;
+        } catch (Exception e) {
+            Msg.debug(this, "Failed to resolve project data from explicit target handle", e);
+            return null;
+        }
+    }
+
+    private ghidra.framework.model.DomainFile resolveExplicitDomainFile(Object ghidraProjectHandle,
+                                                                        String folderPath,
+                                                                        String programName) {
+        ghidra.framework.model.ProjectData projectData = getProjectDataFromHandle(ghidraProjectHandle);
+        if (projectData == null) {
+            return null;
+        }
+
+        ghidra.framework.model.DomainFolder folder = "/".equals(folderPath)
+            ? projectData.getRootFolder()
+            : projectData.getFolder(folderPath);
+        if (folder == null) {
+            return null;
+        }
+        return folder.getFile(programName);
+    }
+
+    private Program openExplicitProgramWritable(ghidra.framework.model.DomainFile domainFile) throws Exception {
+        if (domainFile == null) {
+            return null;
+        }
+
+        Object opened = domainFile.getOpenedDomainObject(this);
+        if (opened instanceof Program) {
+            return (Program) opened;
+        }
+
+        Object result = domainFile.getDomainObject(this, false, false, new ConsoleTaskMonitor());
+        return result instanceof Program ? (Program) result : null;
+    }
+
+    private ghidra.framework.model.Project getProjectFromHandle(Object ghidraProjectHandle) {
+        if (ghidraProjectHandle == null) {
+            return null;
+        }
+        try {
+            Object project = ghidraProjectHandle.getClass().getMethod("getProject").invoke(ghidraProjectHandle);
+            return project instanceof ghidra.framework.model.Project
+                ? (ghidra.framework.model.Project) project
+                : null;
+        } catch (Exception e) {
+            Msg.debug(this, "Failed to resolve project from explicit target handle", e);
+            return null;
+        }
+    }
+
+    private boolean targetMatchesDomainFile(ghidra.framework.model.DomainFile domainFile,
+                                            String projectDir, String projectName,
+                                            String folderPath, String programName) {
+        if (domainFile == null || programName == null || projectDir == null || projectName == null) {
+            return false;
+        }
+
+        ghidra.framework.model.ProjectLocator locator = domainFile.getProjectLocator();
+        if (locator == null) {
+            return false;
+        }
+
+        String targetProjectDir = trimToNull(projectDir);
+        String targetProjectName = trimToNull(projectName);
+        String targetFolderPath = normalizeFolderPath(folderPath);
+
+        if (!projectName.equals(locator.getName())) {
+            return false;
+        }
+        if (!projectDir.equals(locator.getLocation())) {
+            return false;
+        }
+        if (!programName.equals(domainFile.getName())) {
+            return false;
+        }
+
+        ghidra.framework.model.DomainFolder parent = domainFile.getParent();
+        String actualFolderPath = parent == null ? "/" : normalizeFolderPath(parent.getPathname());
+        return targetFolderPath.equals(actualFolderPath);
+    }
+
+    private Program findMatchingOpenProgram(String projectDir, String projectName,
+                                            String folderPath, String programName) {
+        ProgramManager pm = tool.getService(ProgramManager.class);
+        if (pm == null) {
+            return null;
+        }
+
+        Program current = pm.getCurrentProgram();
+        if (current != null && targetMatchesDomainFile(current.getDomainFile(), projectDir, projectName, folderPath, programName)) {
+            return current;
+        }
+
+        for (Program openProgram : pm.getAllOpenPrograms()) {
+            if (openProgram == null) {
+                continue;
+            }
+            if (targetMatchesDomainFile(openProgram.getDomainFile(), projectDir, projectName, folderPath, programName)) {
+                return openProgram;
+            }
+        }
+
+        return null;
+    }
+
+    private ProgramTargetContext resolveWriteTargetContext(Map<String, String> params) {
+        if (!hasExplicitTargetSelectors(params)) {
+            Program program = getCurrentProgram();
+            if (program == null) {
+                return ProgramTargetContext.error("No program loaded");
+            }
+            return ProgramTargetContext.current(program, "current_program=" + program.getName());
+        }
+
+        String projectDir = trimToNull(params.get("project_dir"));
+        String projectName = trimToNull(params.get("project_name"));
+        String programName = trimToNull(params.get("program_name"));
+        String folderPath = normalizeFolderPath(params.get("folder_path"));
+
+        List<String> missing = new ArrayList<>();
+        if (projectDir == null) {
+            missing.add("project_dir");
+        }
+        if (projectName == null) {
+            missing.add("project_name");
+        }
+        if (programName == null) {
+            missing.add("program_name");
+        }
+        if (!missing.isEmpty()) {
+            return ProgramTargetContext.error(
+                "Explicit target selection requires: " + String.join(", ", missing));
+        }
+
+        String summary = "target_project_dir=" + projectDir + "\n"
+            + "target_project_name=" + projectName + "\n"
+            + "target_folder_path=" + folderPath + "\n"
+            + "target_program_name=" + programName;
+
+        Program openProgram = findMatchingOpenProgram(projectDir, projectName, folderPath, programName);
+        if (openProgram != null) {
+            return ProgramTargetContext.current(openProgram,
+                summary + "\n" + "target_resolution=reused_open_program");
+        }
+
+        Object ghidraProjectHandle = null;
+        try {
+            ghidraProjectHandle = openExplicitProjectHandle(projectDir, projectName);
+            ghidra.framework.model.DomainFile domainFile = resolveExplicitDomainFile(ghidraProjectHandle, folderPath, programName);
+            Program program = openExplicitProgramWritable(domainFile);
+            if (program == null) {
+                ghidra.framework.model.Project project = getProjectFromHandle(ghidraProjectHandle);
+                if (project != null && !project.isClosed()) {
+                    project.close();
+                }
+                return ProgramTargetContext.error(
+                    "Failed to open target program " + folderPath + "/" + programName);
+            }
+
+            return ProgramTargetContext.explicit(
+                program,
+                ghidraProjectHandle,
+                domainFile,
+                summary + "\n" + "target_resolution=open_writable_domain_object");
+        } catch (Exception e) {
+            ghidra.framework.model.Project project = getProjectFromHandle(ghidraProjectHandle);
+            if (project != null) {
+                try {
+                    if (!project.isClosed()) {
+                        project.close();
+                    }
+                } catch (Exception closeIgnored) {
+                    Msg.debug(this, "Failed to close explicit target project after open failure", closeIgnored);
+                }
+            }
+            Throwable cause = unwrapReflectionFailure(e);
+            return ProgramTargetContext.error("Failed to open explicit target: " + cause.getMessage());
+        }
+    }
+
+    private void closeWriteTargetContext(ProgramTargetContext context) {
+        if (context == null || !context.explicitTarget) {
+            return;
+        }
+
+        if (context.program != null) {
+            try {
+                context.program.release(this);
+            } catch (Exception e) {
+                Msg.debug(this, "Failed to release explicit target program", e);
+            }
+        }
+
+        ghidra.framework.model.Project project = getProjectFromHandle(context.ghidraProjectHandle);
+        if (project != null) {
+            try {
+                project.releaseFiles(this);
+            } catch (Exception e) {
+                Msg.debug(this, "Failed to release explicit target project files", e);
+            }
+            try {
+                if (!project.isClosed()) {
+                    project.close();
+                }
+            } catch (Exception e) {
+                Msg.debug(this, "Failed to close explicit target project", e);
+            }
+        }
+    }
+
+    private String saveExplicitTargetIfNeeded(ProgramTargetContext context) {
+        if (context == null || !context.explicitTarget) {
+            return "save_mode=current_context";
+        }
+        try {
+            if (context.domainFile != null) {
+                context.domainFile.save(new ConsoleTaskMonitor());
+            } else {
+                context.ghidraProjectHandle.getClass().getMethod("save", Program.class)
+                    .invoke(context.ghidraProjectHandle, context.program);
+            }
+            return "saved_explicit_target=true";
+        } catch (Exception e) {
+            Throwable cause = unwrapReflectionFailure(e);
+            return "saved_explicit_target=false\nsave_error=" + escapeNonAscii(cause.getMessage());
+        }
+    }
+
+    private String formatTargetedResponse(ProgramTargetContext context, String body) {
+        if (context == null) {
+            return body;
+        }
+        if (context.targetSummary == null || context.targetSummary.isBlank()) {
+            return body;
+        }
+        if (body == null || body.isBlank()) {
+            return context.targetSummary;
+        }
+        return context.targetSummary + "\n" + body;
+    }
+
     private boolean setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
         Program program = getCurrentProgram();
         if (program == null) return false;
+        return setCommentAtAddress(program, addressStr, comment, commentType, transactionName);
+    }
+
+    private boolean setCommentAtAddress(Program program, String addressStr, String comment,
+                                        int commentType, String transactionName) {
         if (addressStr == null || addressStr.isEmpty() || comment == null) return false;
 
         AtomicBoolean success = new AtomicBoolean(false);
@@ -1071,11 +1550,19 @@ public class GhidraMCPPlugin extends Plugin {
         return setCommentAtAddress(addressStr, comment, CodeUnit.PRE_COMMENT, "Set decompiler comment");
     }
 
+    private boolean setDecompilerComment(Program program, String addressStr, String comment) {
+        return setCommentAtAddress(program, addressStr, comment, CodeUnit.PRE_COMMENT, "Set decompiler comment");
+    }
+
     /**
      * Set a comment for a given address in the function disassembly
      */
     private boolean setDisassemblyComment(String addressStr, String comment) {
         return setCommentAtAddress(addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
+    }
+
+    private boolean setDisassemblyComment(Program program, String addressStr, String comment) {
+        return setCommentAtAddress(program, addressStr, comment, CodeUnit.EOL_COMMENT, "Set disassembly comment");
     }
 
     /**
@@ -1105,6 +1592,10 @@ public class GhidraMCPPlugin extends Plugin {
     private boolean renameFunctionByAddress(String functionAddrStr, String newName) {
         Program program = getCurrentProgram();
         if (program == null) return false;
+        return renameFunctionByAddress(program, functionAddrStr, newName);
+    }
+
+    private boolean renameFunctionByAddress(Program program, String functionAddrStr, String newName) {
         if (functionAddrStr == null || functionAddrStr.isEmpty() || 
             newName == null || newName.isEmpty()) {
             return false;
@@ -1830,8 +2321,14 @@ public class GhidraMCPPlugin extends Plugin {
     private String createFunctionByAddress(String entryStr, String name, String bodyStartStr, String bodyEndStr, String comment) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
+        return createFunctionByAddress(program, entryStr, name, bodyStartStr, bodyEndStr, comment).message;
+    }
+
+    private OperationResult createFunctionByAddress(Program program, String entryStr, String name,
+                                                    String bodyStartStr, String bodyEndStr,
+                                                    String comment) {
         if (entryStr == null || bodyStartStr == null || bodyEndStr == null) {
-            return "entry, body_start and body_end are required";
+            return new OperationResult(false, "entry, body_start and body_end are required");
         }
 
         AtomicBoolean success = new AtomicBoolean(false);
@@ -1874,15 +2371,19 @@ public class GhidraMCPPlugin extends Plugin {
                 }
             });
         } catch (InterruptedException | InvocationTargetException e) {
-            return "Failed to create function on Swing thread: " + e.getMessage();
+            return new OperationResult(false, "Failed to create function on Swing thread: " + e.getMessage());
         }
-        return message.toString();
+        return new OperationResult(success.get(), message.toString());
     }
 
     private String deleteFunctionByAddress(String entryStr) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
-        if (entryStr == null || entryStr.isBlank()) return "entry is required";
+        return deleteFunctionByAddress(program, entryStr).message;
+    }
+
+    private OperationResult deleteFunctionByAddress(Program program, String entryStr) {
+        if (entryStr == null || entryStr.isBlank()) return new OperationResult(false, "entry is required");
 
         AtomicBoolean success = new AtomicBoolean(false);
         StringBuilder message = new StringBuilder();
@@ -1910,9 +2411,9 @@ public class GhidraMCPPlugin extends Plugin {
                 }
             });
         } catch (InterruptedException | InvocationTargetException e) {
-            return "Failed to delete function on Swing thread: " + e.getMessage();
+            return new OperationResult(false, "Failed to delete function on Swing thread: " + e.getMessage());
         }
-        return message.toString();
+        return new OperationResult(success.get(), message.toString());
     }
 
     private String getFunctionContaining(String addressStr) {
@@ -2276,7 +2777,29 @@ public class GhidraMCPPlugin extends Plugin {
     private String applyProgramEditPlan(String plan, boolean dryRun) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
-        if (plan == null || plan.isBlank()) return "plan is required";
+        return applyProgramEditPlan(program, plan, dryRun).message;
+    }
+
+    private String applyProgramEditPlan(String plan, boolean dryRun, Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        try {
+            OperationResult result = applyProgramEditPlan(context.program, plan, dryRun);
+            String response = formatTargetedResponse(context, result.message);
+            if (result.success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult applyProgramEditPlan(Program program, String plan, boolean dryRun) {
+        if (plan == null || plan.isBlank()) return new OperationResult(false, "plan is required");
 
         StringBuilder out = new StringBuilder();
         int successCount = 0;
@@ -2297,7 +2820,7 @@ public class GhidraMCPPlugin extends Plugin {
                         out.append("DRY-RUN rename_function_by_address ").append(parts[1]).append(" -> ").append(parts[2]).append("\n");
                         successCount++;
                     } else {
-                        String result = renameFunctionByAddress(parts[1], parts[2]) ? "ok" : "failed";
+                        String result = renameFunctionByAddress(program, parts[1], parts[2]) ? "ok" : "failed";
                         out.append("rename_function_by_address ").append(parts[1]).append(": ").append(result).append("\n");
                         if ("ok".equals(result)) successCount++; else failCount++;
                     }
@@ -2309,7 +2832,7 @@ public class GhidraMCPPlugin extends Plugin {
                         out.append("DRY-RUN set_disassembly_comment ").append(parts[1]).append("\n");
                         successCount++;
                     } else {
-                        boolean ok = setDisassemblyComment(parts[1], parts[2]);
+                        boolean ok = setDisassemblyComment(program, parts[1], parts[2]);
                         out.append("set_disassembly_comment ").append(parts[1]).append(": ").append(ok ? "ok" : "failed").append("\n");
                         if (ok) successCount++; else failCount++;
                     }
@@ -2321,7 +2844,7 @@ public class GhidraMCPPlugin extends Plugin {
                         out.append("DRY-RUN set_decompiler_comment ").append(parts[1]).append("\n");
                         successCount++;
                     } else {
-                        boolean ok = setDecompilerComment(parts[1], parts[2]);
+                        boolean ok = setDecompilerComment(program, parts[1], parts[2]);
                         out.append("set_decompiler_comment ").append(parts[1]).append(": ").append(ok ? "ok" : "failed").append("\n");
                         if (ok) successCount++; else failCount++;
                     }
@@ -2333,7 +2856,7 @@ public class GhidraMCPPlugin extends Plugin {
                         out.append("DRY-RUN delete_function_by_address ").append(parts[1]).append("\n");
                         successCount++;
                     } else {
-                        String result = deleteFunctionByAddress(parts[1]);
+                        String result = deleteFunctionByAddress(program, parts[1]).message;
                         out.append("delete_function_by_address ").append(parts[1]).append(": ").append(result).append("\n");
                         if (result.startsWith("Deleted function")) successCount++; else failCount++;
                     }
@@ -2346,7 +2869,7 @@ public class GhidraMCPPlugin extends Plugin {
                         out.append("DRY-RUN create_function_by_address ").append(parts[1]).append("\n");
                         successCount++;
                     } else {
-                        String result = createFunctionByAddress(parts[1], parts[2], parts[3], parts[4], comment);
+                        String result = createFunctionByAddress(program, parts[1], parts[2], parts[3], parts[4], comment).message;
                         out.append("create_function_by_address ").append(parts[1]).append(": ").append(result).append("\n");
                         if (result.startsWith("Created function")) successCount++; else failCount++;
                     }
@@ -2363,12 +2886,16 @@ public class GhidraMCPPlugin extends Plugin {
 
         out.append("summary success=").append(successCount).append(" failed=").append(failCount)
             .append(" dry_run=").append(dryRun);
-        return out.toString();
+        return new OperationResult(failCount == 0, out.toString());
     }
 
     private String reanalyzeRegion(String startStr, String endStr) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
+        return reanalyzeRegion(program, startStr, endStr);
+    }
+
+    private String reanalyzeRegion(Program program, String startStr, String endStr) {
         if (startStr == null || endStr == null) return "start and end are required";
 
         try {
@@ -2388,14 +2915,38 @@ public class GhidraMCPPlugin extends Plugin {
     private String patchBytesAndReanalyze(String startStr, String bytesStr, String comment) {
         Program program = getCurrentProgram();
         if (program == null) return "No program loaded";
-        if (startStr == null || startStr.isBlank()) return "start is required";
-        if (bytesStr == null || bytesStr.isBlank()) return "bytes is required";
+        return patchBytesAndReanalyze(program, startStr, bytesStr, comment).message;
+    }
+
+    private String patchBytesAndReanalyze(String startStr, String bytesStr, String comment,
+                                          Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        try {
+            OperationResult result = patchBytesAndReanalyze(context.program, startStr, bytesStr, comment);
+            String response = formatTargetedResponse(context, result.message);
+            if (result.success && context.explicitTarget) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult patchBytesAndReanalyze(Program program, String startStr,
+                                                   String bytesStr, String comment) {
+        if (startStr == null || startStr.isBlank()) return new OperationResult(false, "start is required");
+        if (bytesStr == null || bytesStr.isBlank()) return new OperationResult(false, "bytes is required");
 
         byte[] patchBytes;
         try {
             patchBytes = parseHexBytes(bytesStr);
         } catch (IllegalArgumentException e) {
-            return "Invalid bytes: " + e.getMessage();
+            return new OperationResult(false, "Invalid bytes: " + e.getMessage());
         }
 
         AtomicBoolean committed = new AtomicBoolean(false);
@@ -2422,20 +2973,21 @@ public class GhidraMCPPlugin extends Plugin {
                 }
             });
         } catch (InterruptedException | InvocationTargetException e) {
-            return "Patch failed on Swing thread: " + e.getMessage();
+            return new OperationResult(false, "Patch failed on Swing thread: " + e.getMessage());
         }
 
         if (!committed.get()) {
-            return out.toString();
+            return new OperationResult(false, out.toString());
         }
 
         try {
             Address start = program.getAddressFactory().getAddress(startStr);
             Address end = start.add(patchBytes.length - 1L);
-            String reanalysis = reanalyzeRegion(start.toString(), end.toString());
-            return out.append("\n").append(reanalysis).toString();
+            String reanalysis = reanalyzeRegion(program, start.toString(), end.toString());
+            return new OperationResult(true, out.append("\n").append(reanalysis).toString());
         } catch (Exception e) {
-            return out.append("\nReanalysis skipped: ").append(e.getMessage()).toString();
+            return new OperationResult(true,
+                out.append("\nReanalysis skipped: ").append(e.getMessage()).toString());
         }
     }
 
@@ -2567,30 +3119,29 @@ public class GhidraMCPPlugin extends Plugin {
         return out.toString();
     }
 
-    private String openCurrentProgramReadonly(int version, boolean makeCurrent) {
-        Program current = getCurrentProgram();
-        if (current == null) return "No program loaded";
+    private String getRuntimeCapabilities() {
+        Program program = getCurrentProgram();
+        ReadonlyScriptCapability capability = probeReadonlyScriptCapability(program);
 
-        ProgramManager pm = tool.getService(ProgramManager.class);
-        if (pm == null) return "Program manager service not available";
-
-        ghidra.framework.model.DomainFile df = current.getDomainFile();
-        if (df == null) return "Current program has no domain file";
-
-        int requestedVersion = version <= 0 ? ghidra.framework.model.DomainFile.DEFAULT_VERSION : version;
-        try {
-            ghidra.framework.model.DomainObject roObj =
-                df.getReadOnlyDomainObject(this, requestedVersion, new ConsoleTaskMonitor());
-            if (!(roObj instanceof Program)) {
-                return "Read-only open did not return a Program";
-            }
-
-            Program roProgram = (Program) roObj;
-            pm.openProgram(roProgram, makeCurrent ? ProgramManager.OPEN_CURRENT : ProgramManager.OPEN_VISIBLE);
-            return "Opened read-only program: " + roProgram.getName() + " version=" + requestedVersion;
-        } catch (Exception e) {
-            return "Failed to open read-only program: " + e.getMessage();
+        StringBuilder out = new StringBuilder();
+        out.append("active_program_loaded=").append(program != null).append("\n");
+        if (program != null) {
+            out.append("active_program=").append(program.getName()).append("\n");
         }
+        out.append("readonly_script_supported=").append(capability.supported).append("\n");
+        out.append("readonly_script_status=").append(capability.status).append("\n");
+        out.append("readonly_script_reason=").append(capability.reason).append("\n");
+        if (capability.detail != null && !capability.detail.isBlank()) {
+            out.append("readonly_script_detail=").append(escapeNonAscii(capability.detail)).append("\n");
+        }
+        out.append("read_only_program_open_supported=false\n");
+        out.append("explicit_write_target_selection_supported=true\n");
+        out.append("explicit_write_target_fields=project_dir,project_name,folder_path,program_name");
+        return out.toString();
+    }
+
+    private String openCurrentProgramReadonly(int version, boolean makeCurrent) {
+        return "unsupported: MCP will not open programs in read-only mode; use the live writable program context instead";
     }
 
     private String runReadonlyScript(String scriptPath, String scriptText) {
@@ -2604,6 +3155,11 @@ public class GhidraMCPPlugin extends Plugin {
         }
         if (hasPath && hasText) {
             return "Provide only one of script_path or script_text";
+        }
+
+        ReadonlyScriptCapability capability = probeReadonlyScriptCapability(program);
+        if (!capability.supported) {
+            return formatReadonlyUnsupportedResponse(capability);
         }
 
         generic.jar.ResourceFile scriptFile = null;
@@ -2653,6 +3209,61 @@ public class GhidraMCPPlugin extends Plugin {
             return "Failed to run readonly script: " + e.getMessage();
         } finally {
             if (deleteAfterRun && scriptFile != null) {
+                scriptFile.delete();
+            }
+        }
+    }
+
+    private String formatReadonlyUnsupportedResponse(ReadonlyScriptCapability capability) {
+        return "status=" + capability.status + "\n"
+            + "operation=run_readonly_script\n"
+            + "reason=" + capability.reason + "\n"
+            + "detail=" + escapeNonAscii(capability.detail == null ? "" : capability.detail);
+    }
+
+    private ReadonlyScriptCapability probeReadonlyScriptCapability(Program program) {
+        if (program == null) {
+            return new ReadonlyScriptCapability(false, "unsupported", "no_program_loaded",
+                "No program loaded");
+        }
+
+        generic.jar.ResourceFile scriptFile = null;
+        try {
+            scriptFile = writeTempReadonlyScript("print(\"__ghidra_mcp_readonly_probe__\")");
+            GhidraScriptProvider provider = GhidraScriptUtil.getProvider(scriptFile);
+            if (provider == null) {
+                return new ReadonlyScriptCapability(false, "unsupported", "no_script_provider",
+                    "No script provider for file: " + scriptFile.getName());
+            }
+
+            StringWriter outputBuffer = new StringWriter();
+            PrintWriter writer = new PrintWriter(outputBuffer, true);
+            GhidraScript script = provider.getScriptInstance(scriptFile, writer);
+            if (script == null) {
+                return new ReadonlyScriptCapability(false, "unsupported", "script_load_failed",
+                    "Unable to load readonly script provider instance");
+            }
+
+            GhidraState state = new GhidraState(
+                tool,
+                tool.getProject(),
+                program,
+                null,
+                null,
+                null);
+            script.execute(state, new ConsoleTaskMonitor(), writer);
+            return new ReadonlyScriptCapability(true, "supported", "available",
+                outputBuffer.toString().trim());
+        } catch (Exception e) {
+            String message = e.getMessage() == null ? e.toString() : e.getMessage();
+            String normalized = message.toLowerCase(Locale.ROOT);
+            if (normalized.contains("not started with pyghidra") ||
+                normalized.contains("python is not available")) {
+                return new ReadonlyScriptCapability(false, "unsupported", "python_not_available", message);
+            }
+            return new ReadonlyScriptCapability(false, "unsupported", "probe_failed", message);
+        } finally {
+            if (scriptFile != null) {
                 scriptFile.delete();
             }
         }
@@ -2836,9 +3447,85 @@ public class GhidraMCPPlugin extends Plugin {
         return sb.toString();
     }
 
-    public Program getCurrentProgram() {
+    private Program getFirstOpenProgram(ProgramManager pm) {
+        if (pm == null) {
+            return null;
+        }
+
+        try {
+            Object openPrograms = ProgramManager.class.getMethod("getAllOpenPrograms").invoke(pm);
+            if (openPrograms instanceof Program[]) {
+                Program[] programs = (Program[]) openPrograms;
+                for (Program program : programs) {
+                    if (program != null) {
+                        return program;
+                    }
+                }
+            }
+            else if (openPrograms instanceof Collection<?>) {
+                Collection<?> programs = (Collection<?>) openPrograms;
+                for (Object candidate : programs) {
+                    if (candidate instanceof Program) {
+                        return (Program) candidate;
+                    }
+                }
+            }
+        }
+        catch (ReflectiveOperationException e) {
+            Msg.debug(this, "ProgramManager#getAllOpenPrograms unavailable", e);
+        }
+
+        return null;
+    }
+
+    private Program resolveCurrentProgramOnSwingThread() {
         ProgramManager pm = tool.getService(ProgramManager.class);
-        return pm != null ? pm.getCurrentProgram() : null;
+        if (pm != null) {
+            Program current = pm.getCurrentProgram();
+            if (current != null) {
+                lastKnownProgram = current;
+                return current;
+            }
+        }
+
+        CodeViewerService codeViewer = tool.getService(CodeViewerService.class);
+        if (codeViewer != null) {
+            ProgramLocation location = codeViewer.getCurrentLocation();
+            if (location != null && location.getProgram() != null) {
+                lastKnownProgram = location.getProgram();
+                return location.getProgram();
+            }
+        }
+
+        Program openProgram = getFirstOpenProgram(pm);
+        if (openProgram != null) {
+            lastKnownProgram = openProgram;
+            return openProgram;
+        }
+
+        return lastKnownProgram;
+    }
+
+    public Program getCurrentProgram() {
+        AtomicReference<Program> programRef = new AtomicReference<>();
+
+        try {
+            if (SwingUtilities.isEventDispatchThread()) {
+                programRef.set(resolveCurrentProgramOnSwingThread());
+            }
+            else {
+                SwingUtilities.invokeAndWait(() -> programRef.set(resolveCurrentProgramOnSwingThread()));
+            }
+        }
+        catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            Msg.error(this, "Interrupted while resolving current program", e);
+        }
+        catch (InvocationTargetException e) {
+            Msg.error(this, "Failed to resolve current program on Swing thread", e);
+        }
+
+        return programRef.get();
     }
 
     private void sendResponse(HttpExchange exchange, String response) throws IOException {
