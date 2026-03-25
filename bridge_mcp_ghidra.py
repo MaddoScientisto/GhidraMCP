@@ -258,6 +258,25 @@ def _build_recap(method: str, endpoint: str, payload: dict | str | None = None) 
     return f"{method} {endpoint_text}"
 
 
+def _with_target_params(
+    payload: dict | None,
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> dict:
+    data = dict(payload or {})
+    if project_dir.strip():
+        data["project_dir"] = project_dir.strip()
+    if project_name.strip():
+        data["project_name"] = project_name.strip()
+    if folder_path.strip():
+        data["folder_path"] = folder_path.strip()
+    if program_name.strip():
+        data["program_name"] = program_name.strip()
+    return data
+
+
 def _preview_text(value: str, max_len: int = 120) -> str:
     """
     Normalize a text field for compact tool output.
@@ -603,7 +622,14 @@ def rename_functions_by_address(batch: list[dict[str, str]]) -> str:
     return f"Rename functions by address: items={len(lines)}\n{result}"
 
 @mcp.tool()
-def apply_program_edit_plan(plan: str, dry_run: bool = False) -> str:
+def apply_program_edit_plan(
+    plan: str,
+    dry_run: bool = False,
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> str:
     """
     Apply a simple line-oriented edit plan.
 
@@ -613,11 +639,14 @@ def apply_program_edit_plan(plan: str, dry_run: bool = False) -> str:
     - rename_function_by_address|address|new_name
     - set_disassembly_comment|address|comment
     - set_decompiler_comment|address|comment
+
+    Optional explicit target selectors:
+    - project_dir, project_name, folder_path, program_name
     """
-    return safe_post("apply_program_edit_plan", {
+    return safe_post("apply_program_edit_plan", _with_target_params({
         "plan": plan,
         "dry_run": str(dry_run).lower(),
-    })
+    }, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def reanalyze_region(start: str, end: str) -> str:
@@ -627,17 +656,28 @@ def reanalyze_region(start: str, end: str) -> str:
     return safe_post("reanalyze_region", {"start": start, "end": end})
 
 @mcp.tool()
-def patch_bytes_and_reanalyze(start: str, bytes: str, comment: str = "") -> str:
+def patch_bytes_and_reanalyze(
+    start: str,
+    bytes: str,
+    comment: str = "",
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> str:
     """
     Patch bytes at start address and trigger reanalysis.
 
     bytes format: "90 90 90" or "0x90 0x90 0x90"
+
+    Optional explicit target selectors:
+    - project_dir, project_name, folder_path, program_name
     """
-    return safe_post("patch_bytes_and_reanalyze", {
+    return safe_post("patch_bytes_and_reanalyze", _with_target_params({
         "start": start,
         "bytes": bytes,
         "comment": comment,
-    })
+    }, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def analyze_function_boundaries(start: str, end: str) -> list:
@@ -654,9 +694,16 @@ def get_project_access_info() -> str:
     return "\n".join(safe_get("get_project_access_info"))
 
 @mcp.tool()
+def get_runtime_capabilities() -> str:
+    """
+    Report runtime capabilities, including readonly-script support state.
+    """
+    return "\n".join(safe_get("get_runtime_capabilities"))
+
+@mcp.tool()
 def open_current_program_readonly(version: int = -1, make_current: bool = True) -> str:
     """
-    Open a read-only program object for the currently loaded domain file.
+    Deprecated: MCP no longer opens programs in read-only mode.
     """
     return safe_post("open_current_program_readonly", {
         "version": str(version),
