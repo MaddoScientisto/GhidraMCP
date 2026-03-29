@@ -240,7 +240,7 @@ def _format_param_summary(payload: dict | str) -> str:
         if value is None or str(value).strip() == "":
             continue
 
-        if key in {"batch", "plan", "script_text"}:
+        if key in {"batch", "plan", "script_text", "mappings"}:
             length = len(str(value))
             pieces.append(f"{key}=<{length} chars>")
             continue
@@ -274,6 +274,27 @@ def _with_target_params(
         data["folder_path"] = folder_path.strip()
     if program_name.strip():
         data["program_name"] = program_name.strip()
+    return data
+
+
+def _with_prefixed_target_params(
+    payload: dict | None,
+    prefix: str,
+    project_dir: str = "",
+    project_name: str = "",
+    folder_path: str = "",
+    program_name: str = "",
+) -> dict:
+    data = dict(payload or {})
+    normalized_prefix = prefix or ""
+    if project_dir.strip():
+        data[f"{normalized_prefix}project_dir"] = project_dir.strip()
+    if project_name.strip():
+        data[f"{normalized_prefix}project_name"] = project_name.strip()
+    if folder_path.strip():
+        data[f"{normalized_prefix}folder_path"] = folder_path.strip()
+    if program_name.strip():
+        data[f"{normalized_prefix}program_name"] = program_name.strip()
     return data
 
 
@@ -331,18 +352,18 @@ def _build_batch_lines(
     return lines, None
 
 @mcp.tool()
-def list_methods(offset: int = 0, limit: int = 100) -> list:
+def list_methods(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List all function names in the program with pagination.
     """
-    return safe_get("methods", {"offset": offset, "limit": limit})
+    return safe_get("methods", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def list_classes(offset: int = 0, limit: int = 100) -> list:
+def list_classes(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List all namespace/class names in the program with pagination.
     """
-    return safe_get("classes", {"offset": offset, "limit": limit})
+    return safe_get("classes", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def decompile_function(name: str) -> str:
@@ -370,11 +391,11 @@ def rename_data(address: str, new_name: str) -> str:
     )
 
 @mcp.tool()
-def get_symbol_at(address: str) -> str:
+def get_symbol_at(address: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
     """
     Get the current primary symbol state at an address.
     """
-    params = {"address": address}
+    params = _with_target_params({"address": address}, project_dir, project_name, folder_path, program_name)
     for endpoint in ("get_symbol_at", "symbol_at", "getSymbolAt", "symbolAt", "get_symbol"):
         result = safe_get(endpoint, params)
         if not _response_has_http_404(result):
@@ -407,48 +428,48 @@ def get_symbol_at(address: str) -> str:
     )
 
 @mcp.tool()
-def list_segments(offset: int = 0, limit: int = 100) -> list:
+def list_segments(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List all memory segments in the program with pagination.
     """
-    return safe_get("segments", {"offset": offset, "limit": limit})
+    return safe_get("segments", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def list_imports(offset: int = 0, limit: int = 100) -> list:
+def list_imports(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List imported symbols in the program with pagination.
     """
-    return safe_get("imports", {"offset": offset, "limit": limit})
+    return safe_get("imports", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def list_exports(offset: int = 0, limit: int = 100) -> list:
+def list_exports(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List exported functions/symbols with pagination.
     """
-    return safe_get("exports", {"offset": offset, "limit": limit})
+    return safe_get("exports", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def list_namespaces(offset: int = 0, limit: int = 100) -> list:
+def list_namespaces(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List all non-global namespaces in the program with pagination.
     """
-    return safe_get("namespaces", {"offset": offset, "limit": limit})
+    return safe_get("namespaces", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def list_data_items(offset: int = 0, limit: int = 100) -> list:
+def list_data_items(offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List defined data labels and their values with pagination.
     """
-    return safe_get("data", {"offset": offset, "limit": limit})
+    return safe_get("data", _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def search_functions_by_name(query: str, offset: int = 0, limit: int = 100) -> list:
+def search_functions_by_name(query: str, offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Search for functions whose name contains the given substring.
     """
     if not query:
         return ["Error: query string is required"]
-    return safe_get("searchFunctions", {"query": query, "offset": offset, "limit": limit})
+    return safe_get("searchFunctions", _with_target_params({"query": query, "offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
@@ -462,11 +483,11 @@ def rename_variable(function_name: str, old_name: str, new_name: str) -> str:
     })
 
 @mcp.tool()
-def get_function_by_address(address: str) -> str:
+def get_function_by_address(address: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
     """
     Get a function by its address.
     """
-    return "\n".join(safe_get("get_function_by_address", {"address": address}))
+    return "\n".join(safe_get("get_function_by_address", _with_target_params({"address": address}, project_dir, project_name, folder_path, program_name)))
 
 @mcp.tool()
 def get_current_address() -> str:
@@ -483,25 +504,25 @@ def get_current_function() -> str:
     return "\n".join(safe_get("get_current_function"))
 
 @mcp.tool()
-def list_functions() -> list:
+def list_functions(project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List all functions in the database.
     """
-    return safe_get("list_functions")
+    return safe_get("list_functions", _with_target_params({}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def decompile_function_by_address(address: str) -> str:
+def decompile_function_by_address(address: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
     """
     Decompile a function at the given address.
     """
-    return "\n".join(safe_get("decompile_function", {"address": address}))
+    return "\n".join(safe_get("decompile_function", _with_target_params({"address": address}, project_dir, project_name, folder_path, program_name)))
 
 @mcp.tool()
-def disassemble_function(address: str) -> list:
+def disassemble_function(address: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Get assembly code (address: instruction; comment) for a function.
     """
-    return safe_get("disassemble_function", {"address": address})
+    return safe_get("disassemble_function", _with_target_params({"address": address}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def create_function_by_address(entry: str, name: str, body_start: str, body_end: str, comment: str = "") -> str:
@@ -524,54 +545,54 @@ def delete_function_by_address(entry: str) -> str:
     return safe_post("delete_function_by_address", {"entry": entry})
 
 @mcp.tool()
-def get_function_containing(address: str) -> str:
+def get_function_containing(address: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
     """
     Get the function containing the provided address.
     """
-    return "\n".join(safe_get("get_function_containing", {"address": address}))
+    return "\n".join(safe_get("get_function_containing", _with_target_params({"address": address}, project_dir, project_name, folder_path, program_name)))
 
 @mcp.tool()
-def read_region(start: str, end: str) -> str:
+def read_region(start: str, end: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
     """
     Read raw bytes from memory in the range [start, end].
     """
-    return "\n".join(safe_get("read_region", {"start": start, "end": end}))
+    return "\n".join(safe_get("read_region", _with_target_params({"start": start, "end": end}, project_dir, project_name, folder_path, program_name)))
 
 @mcp.tool()
-def disassemble_region(start: str, end: str) -> list:
+def disassemble_region(start: str, end: str, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Disassemble instructions in an arbitrary address range.
     """
-    return safe_get("disassemble_region", {"start": start, "end": end})
+    return safe_get("disassemble_region", _with_target_params({"start": start, "end": end}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def get_instruction_window(address: str, before_count: int = 5, after_count: int = 5) -> list:
+def get_instruction_window(address: str, before_count: int = 5, after_count: int = 5, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Dump nearby instructions around an address.
     """
-    return safe_get("get_instruction_window", {
+    return safe_get("get_instruction_window", _with_target_params({
         "address": address,
         "before_count": before_count,
         "after_count": after_count,
-    })
+    }, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def search_instructions(query: str, mode: str = "text", limit: int = 200) -> list:
+def search_instructions(query: str, mode: str = "text", limit: int = 200, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Search instructions by rendered text, operand text, or address tokens.
     """
-    return safe_get("search_instructions", {"query": query, "mode": mode, "limit": limit})
+    return safe_get("search_instructions", _with_target_params({"query": query, "mode": mode, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def get_data_uses(address: str, include_operand_scans: bool = True, limit: int = 200) -> list:
+def get_data_uses(address: str, include_operand_scans: bool = True, limit: int = 200, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Get data-address uses from reference manager plus optional instruction scans.
     """
-    return safe_get("get_data_uses", {
+    return safe_get("get_data_uses", _with_target_params({
         "address": address,
         "include_operand_scans": str(include_operand_scans).lower(),
         "limit": limit,
-    })
+    }, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
 def set_comments(batch: list[dict[str, str]]) -> str:
@@ -770,7 +791,7 @@ def set_local_variable_type(function_address: str, variable_name: str, new_type:
     return safe_post("set_local_variable_type", {"function_address": function_address, "variable_name": variable_name, "new_type": new_type})
 
 @mcp.tool()
-def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
+def get_xrefs_to(address: str, offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Get all references to the specified address (xref to).
     
@@ -782,14 +803,14 @@ def get_xrefs_to(address: str, offset: int = 0, limit: int = 100) -> list:
     Returns:
         List of references to the specified address
     """
-    params = {"address": address, "offset": offset, "limit": limit}
+    params = _with_target_params({"address": address, "offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name)
     result = safe_get("get_xrefs_to", params)
     if _response_has_http_404(result):
         return safe_get("xrefs_to", params)
     return result
 
 @mcp.tool()
-def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
+def get_xrefs_from(address: str, offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Get all references from the specified address (xref from).
     
@@ -801,14 +822,14 @@ def get_xrefs_from(address: str, offset: int = 0, limit: int = 100) -> list:
     Returns:
         List of references from the specified address
     """
-    params = {"address": address, "offset": offset, "limit": limit}
+    params = _with_target_params({"address": address, "offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name)
     result = safe_get("get_xrefs_from", params)
     if _response_has_http_404(result):
         return safe_get("xrefs_from", params)
     return result
 
 @mcp.tool()
-def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
+def get_function_xrefs(name: str, offset: int = 0, limit: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     Get all references to the specified function by name.
     
@@ -820,10 +841,10 @@ def get_function_xrefs(name: str, offset: int = 0, limit: int = 100) -> list:
     Returns:
         List of references to the specified function
     """
-    return safe_get("function_xrefs", {"name": name, "offset": offset, "limit": limit})
+    return safe_get("function_xrefs", _with_target_params({"name": name, "offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name))
 
 @mcp.tool()
-def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list:
+def list_strings(offset: int = 0, limit: int = 2000, filter: str = None, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
     """
     List all defined strings in the program with their addresses.
     
@@ -835,10 +856,114 @@ def list_strings(offset: int = 0, limit: int = 2000, filter: str = None) -> list
     Returns:
         List of strings with their addresses
     """
-    params = {"offset": offset, "limit": limit}
+    params = _with_target_params({"offset": offset, "limit": limit}, project_dir, project_name, folder_path, program_name)
     if filter:
         params["filter"] = filter
     return safe_get("strings", params)
+
+@mcp.tool()
+def search_bytes(pattern: str, start: str = "", end: str = "", segment_filter: str = "", max_hits: int = 100, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Search program memory for a byte pattern with optional wildcards like ??.
+    """
+    return "\n".join(safe_get("search_bytes", _with_target_params({
+        "pattern": pattern,
+        "start": start,
+        "end": end,
+        "segment_filter": segment_filter,
+        "max_hits": max_hits,
+    }, project_dir, project_name, folder_path, program_name)))
+
+@mcp.tool()
+def get_callers(target: str, include_near: bool = True, include_far: bool = True, include_jumps: bool = True, limit: int = 200, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> list:
+    """
+    Recover callers for a function by name or address, including scan-based local call sites.
+    """
+    return safe_get("get_callers", _with_target_params({
+        "target": target,
+        "include_near": str(include_near).lower(),
+        "include_far": str(include_far).lower(),
+        "include_jumps": str(include_jumps).lower(),
+        "limit": limit,
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
+def list_project_programs(project_dir: str = "", project_name: str = "", folder_path: str = "", recursive: bool = True) -> list:
+    """
+    List folders and programs available in a Ghidra project.
+    """
+    return safe_get("list_project_programs", {
+        "project_dir": project_dir,
+        "project_name": project_name,
+        "folder_path": folder_path,
+        "recursive": str(recursive).lower(),
+    })
+
+@mcp.tool()
+def compare_regions(left_start: str, left_end: str, right_start: str, right_end: str, mode: str = "bytes", max_diffs: int = 100, left_project_dir: str = "", left_project_name: str = "", left_folder_path: str = "", left_program_name: str = "", right_project_dir: str = "", right_project_name: str = "", right_folder_path: str = "", right_program_name: str = "") -> str:
+    """
+    Compare two regions across programs using bytes, words, disassembly, or strings.
+    """
+    params = {
+        "left_start": left_start,
+        "left_end": left_end,
+        "right_start": right_start,
+        "right_end": right_end,
+        "mode": mode,
+        "max_diffs": max_diffs,
+    }
+    params = _with_prefixed_target_params(params, "left_", left_project_dir, left_project_name, left_folder_path, left_program_name)
+    params = _with_prefixed_target_params(params, "right_", right_project_dir, right_project_name, right_folder_path, right_program_name)
+    return "\n".join(safe_get("compare_regions", params))
+
+@mcp.tool()
+def compare_strings(filter: str = "", max_results: int = 200, left_project_dir: str = "", left_project_name: str = "", left_folder_path: str = "", left_program_name: str = "", right_project_dir: str = "", right_project_name: str = "", right_folder_path: str = "", right_program_name: str = "") -> str:
+    """
+    Compare defined strings across two programs.
+    """
+    params = {
+        "filter": filter,
+        "max_results": max_results,
+    }
+    params = _with_prefixed_target_params(params, "left_", left_project_dir, left_project_name, left_folder_path, left_program_name)
+    params = _with_prefixed_target_params(params, "right_", right_project_dir, right_project_name, right_folder_path, right_program_name)
+    return "\n".join(safe_get("compare_strings", params))
+
+@mcp.tool()
+def compare_functions(left_function: str, right_function: str, mode: str = "signature", limit: int = 200, left_project_dir: str = "", left_project_name: str = "", left_folder_path: str = "", left_program_name: str = "", right_project_dir: str = "", right_project_name: str = "", right_folder_path: str = "", right_program_name: str = "") -> str:
+    """
+    Compare two functions across programs using signature, disassembly, decompile, or xrefs.
+    """
+    params = {
+        "left_function": left_function,
+        "right_function": right_function,
+        "mode": mode,
+        "limit": limit,
+    }
+    params = _with_prefixed_target_params(params, "left_", left_project_dir, left_project_name, left_folder_path, left_program_name)
+    params = _with_prefixed_target_params(params, "right_", right_project_dir, right_project_name, right_folder_path, right_program_name)
+    return "\n".join(safe_get("compare_functions", params))
+
+@mcp.tool()
+def port_symbols(mappings: list[dict[str, str]], apply: str = "both", provenance_comment_template: str = "", dry_run: bool = False, source_project_dir: str = "", source_project_name: str = "", source_folder_path: str = "", source_program_name: str = "", target_project_dir: str = "", target_project_name: str = "", target_folder_path: str = "", target_program_name: str = "") -> str:
+    """
+    Port names and comments from one program to another.
+
+    Input format: [{"source_address": "...", "target_address": "..."}, ...]
+    """
+    lines, error = _build_batch_lines(mappings, "source_address", "target_address", "source_address", "target_address")
+    if error:
+        return error
+
+    params = {
+        "mappings": "\n".join(lines),
+        "apply": apply,
+        "provenance_comment_template": provenance_comment_template,
+        "dry_run": str(dry_run).lower(),
+    }
+    params = _with_prefixed_target_params(params, "source_", source_project_dir, source_project_name, source_folder_path, source_program_name)
+    params = _with_prefixed_target_params(params, "target_", target_project_dir, target_project_name, target_folder_path, target_program_name)
+    return safe_post("port_symbols", params)
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")

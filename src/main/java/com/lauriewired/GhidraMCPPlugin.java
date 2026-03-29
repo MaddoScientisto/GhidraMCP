@@ -124,14 +124,16 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, getAllFunctionNames(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getAllFunctionNames(program, offset, limit)));
         });
 
         server.createContext("/classes", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, getAllClassNames(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getAllClassNames(program, offset, limit)));
         });
 
         server.createContext("/decompile", exchange -> {
@@ -154,31 +156,36 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_symbol_at", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getSymbolAt(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getSymbolAt(program, address)));
         });
 
         server.createContext("/symbol_at", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getSymbolAt(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getSymbolAt(program, address)));
         });
 
         server.createContext("/getSymbolAt", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getSymbolAt(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getSymbolAt(program, address)));
         });
 
         server.createContext("/symbolAt", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getSymbolAt(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getSymbolAt(program, address)));
         });
 
         server.createContext("/get_symbol", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getSymbolAt(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getSymbolAt(program, address)));
         });
 
         server.createContext("/renameVariable", exchange -> {
@@ -194,35 +201,40 @@ public class GhidraMCPPlugin extends Plugin {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listSegments(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listSegments(program, offset, limit)));
         });
 
         server.createContext("/imports", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listImports(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listImports(program, offset, limit)));
         });
 
         server.createContext("/exports", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listExports(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listExports(program, offset, limit)));
         });
 
         server.createContext("/namespaces", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listNamespaces(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listNamespaces(program, offset, limit)));
         });
 
         server.createContext("/data", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit  = parseIntOrDefault(qparams.get("limit"),  100);
-            sendResponse(exchange, listDefinedData(offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listDefinedData(program, offset, limit)));
         });
 
         server.createContext("/searchFunctions", exchange -> {
@@ -230,7 +242,8 @@ public class GhidraMCPPlugin extends Plugin {
             String searchTerm = qparams.get("query");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, searchFunctionsByName(searchTerm, offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> searchFunctionsByName(program, searchTerm, offset, limit)));
         });
 
         // New API endpoints based on requirements
@@ -238,7 +251,8 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_function_by_address", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getFunctionByAddress(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getFunctionByAddress(program, address)));
         });
 
         server.createContext("/get_current_address", exchange -> {
@@ -250,19 +264,23 @@ public class GhidraMCPPlugin extends Plugin {
         });
 
         server.createContext("/list_functions", exchange -> {
-            sendResponse(exchange, listFunctions());
+            Map<String, String> qparams = parseQueryParams(exchange);
+            sendResponse(exchange, withReadTargetContext(qparams,
+                this::listFunctions));
         });
 
         server.createContext("/decompile_function", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, decompileFunctionByAddress(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> decompileFunctionByAddress(program, address)));
         });
 
         server.createContext("/disassemble_function", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, disassembleFunction(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> disassembleFunction(program, address)));
         });
 
         server.createContext("/create_function_by_address", exchange -> {
@@ -284,21 +302,24 @@ public class GhidraMCPPlugin extends Plugin {
         server.createContext("/get_function_containing", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String address = qparams.get("address");
-            sendResponse(exchange, getFunctionContaining(address));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getFunctionContaining(program, address)));
         });
 
         server.createContext("/read_region", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String start = qparams.get("start");
             String end = qparams.get("end");
-            sendResponse(exchange, readRegion(start, end));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> readRegion(program, start, end)));
         });
 
         server.createContext("/disassemble_region", exchange -> {
             Map<String, String> qparams = parseQueryParams(exchange);
             String start = qparams.get("start");
             String end = qparams.get("end");
-            sendResponse(exchange, disassembleRegion(start, end));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> disassembleRegion(program, start, end)));
         });
 
         server.createContext("/get_instruction_window", exchange -> {
@@ -306,7 +327,8 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int beforeCount = parseIntOrDefault(qparams.get("before_count"), 5);
             int afterCount = parseIntOrDefault(qparams.get("after_count"), 5);
-            sendResponse(exchange, getInstructionWindow(address, beforeCount, afterCount));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getInstructionWindow(program, address, beforeCount, afterCount)));
         });
 
         server.createContext("/search_instructions", exchange -> {
@@ -314,7 +336,8 @@ public class GhidraMCPPlugin extends Plugin {
             String query = qparams.get("query");
             String mode = qparams.get("mode");
             int limit = parseIntOrDefault(qparams.get("limit"), 200);
-            sendResponse(exchange, searchInstructions(query, mode, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> searchInstructions(program, query, mode, limit)));
         });
 
         server.createContext("/get_data_uses", exchange -> {
@@ -322,7 +345,8 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             boolean includeOperandScans = parseBooleanOrDefault(qparams.get("include_operand_scans"), true);
             int limit = parseIntOrDefault(qparams.get("limit"), 200);
-            sendResponse(exchange, getDataUses(address, includeOperandScans, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getDataUses(program, address, includeOperandScans, limit)));
         });
 
         server.createContext("/set_decompiler_comment", exchange -> {
@@ -423,7 +447,8 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsTo(address, offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getXrefsTo(program, address, offset, limit)));
         });
 
         // Alias route for clients that use get_* naming for xref tools.
@@ -432,7 +457,8 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsTo(address, offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getXrefsTo(program, address, offset, limit)));
         });
 
         server.createContext("/xrefs_from", exchange -> {
@@ -440,7 +466,8 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsFrom(address, offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getXrefsFrom(program, address, offset, limit)));
         });
 
         // Alias route for clients that use get_* naming for xref tools.
@@ -449,7 +476,8 @@ public class GhidraMCPPlugin extends Plugin {
             String address = qparams.get("address");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getXrefsFrom(address, offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getXrefsFrom(program, address, offset, limit)));
         });
 
         server.createContext("/function_xrefs", exchange -> {
@@ -457,7 +485,8 @@ public class GhidraMCPPlugin extends Plugin {
             String name = qparams.get("name");
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
-            sendResponse(exchange, getFunctionXrefs(name, offset, limit));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getFunctionXrefs(program, name, offset, limit)));
         });
 
         server.createContext("/strings", exchange -> {
@@ -465,7 +494,100 @@ public class GhidraMCPPlugin extends Plugin {
             int offset = parseIntOrDefault(qparams.get("offset"), 0);
             int limit = parseIntOrDefault(qparams.get("limit"), 100);
             String filter = qparams.get("filter");
-            sendResponse(exchange, listDefinedStrings(offset, limit, filter));
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listDefinedStrings(program, offset, limit, filter)));
+        });
+
+        server.createContext("/search_bytes", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String pattern = qparams.get("pattern");
+            String start = qparams.get("start");
+            String end = qparams.get("end");
+            String segmentFilter = qparams.get("segment_filter");
+            int maxHits = parseIntOrDefault(qparams.get("max_hits"), 100);
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> searchBytes(program, pattern, start, end, segmentFilter, maxHits)));
+        });
+
+        server.createContext("/get_callers", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String target = qparams.get("target");
+            boolean includeNear = parseBooleanOrDefault(qparams.get("include_near"), true);
+            boolean includeFar = parseBooleanOrDefault(qparams.get("include_far"), true);
+            boolean includeJumps = parseBooleanOrDefault(qparams.get("include_jumps"), true);
+            int limit = parseIntOrDefault(qparams.get("limit"), 200);
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getCallers(program, target, includeNear, includeFar, includeJumps, limit)));
+        });
+
+        server.createContext("/callers", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String target = qparams.get("target");
+            boolean includeNear = parseBooleanOrDefault(qparams.get("include_near"), true);
+            boolean includeFar = parseBooleanOrDefault(qparams.get("include_far"), true);
+            boolean includeJumps = parseBooleanOrDefault(qparams.get("include_jumps"), true);
+            int limit = parseIntOrDefault(qparams.get("limit"), 200);
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> getCallers(program, target, includeNear, includeFar, includeJumps, limit)));
+        });
+
+        server.createContext("/list_project_programs", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String projectDir = qparams.get("project_dir");
+            String projectName = qparams.get("project_name");
+            String folderPath = qparams.get("folder_path");
+            boolean recursive = parseBooleanOrDefault(qparams.get("recursive"), true);
+            sendResponse(exchange, listProjectPrograms(projectDir, projectName, folderPath, recursive));
+        });
+
+        server.createContext("/project_programs", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String projectDir = qparams.get("project_dir");
+            String projectName = qparams.get("project_name");
+            String folderPath = qparams.get("folder_path");
+            boolean recursive = parseBooleanOrDefault(qparams.get("recursive"), true);
+            sendResponse(exchange, listProjectPrograms(projectDir, projectName, folderPath, recursive));
+        });
+
+        server.createContext("/compare_regions", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String leftStart = qparams.get("left_start");
+            String leftEnd = qparams.get("left_end");
+            String rightStart = qparams.get("right_start");
+            String rightEnd = qparams.get("right_end");
+            String mode = qparams.get("mode");
+            int maxDiffs = parseIntOrDefault(qparams.get("max_diffs"), 100);
+            sendResponse(exchange, withDualTargetContexts(qparams, "left_", "right_",
+                (leftProgram, rightProgram) -> compareRegions(
+                    leftProgram, rightProgram, leftStart, leftEnd, rightStart, rightEnd, mode, maxDiffs)));
+        });
+
+        server.createContext("/compare_strings", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String filter = qparams.get("filter");
+            int maxResults = parseIntOrDefault(qparams.get("max_results"), 200);
+            sendResponse(exchange, withDualTargetContexts(qparams, "left_", "right_",
+                (leftProgram, rightProgram) -> compareStrings(leftProgram, rightProgram, filter, maxResults)));
+        });
+
+        server.createContext("/compare_functions", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String leftFunction = qparams.get("left_function");
+            String rightFunction = qparams.get("right_function");
+            String mode = qparams.get("mode");
+            int limit = parseIntOrDefault(qparams.get("limit"), 200);
+            sendResponse(exchange, withDualTargetContexts(qparams, "left_", "right_",
+                (leftProgram, rightProgram) -> compareFunctions(
+                    leftProgram, rightProgram, leftFunction, rightFunction, mode, limit)));
+        });
+
+        server.createContext("/port_symbols", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String mappings = params.get("mappings");
+            String apply = params.get("apply");
+            String provenanceCommentTemplate = params.get("provenance_comment_template");
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, portSymbols(params, mappings, apply, provenanceCommentTemplate, dryRun));
         });
 
         server.createContext("/set_comments", exchange -> {
@@ -558,7 +680,10 @@ public class GhidraMCPPlugin extends Plugin {
     // ----------------------------------------------------------------------------------
 
     private String getAllFunctionNames(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return getAllFunctionNames(getCurrentProgram(), offset, limit);
+    }
+
+    private String getAllFunctionNames(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         List<String> names = new ArrayList<>();
@@ -569,7 +694,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String getAllClassNames(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return getAllClassNames(getCurrentProgram(), offset, limit);
+    }
+
+    private String getAllClassNames(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         Set<String> classNames = new HashSet<>();
@@ -586,7 +714,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String listSegments(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return listSegments(getCurrentProgram(), offset, limit);
+    }
+
+    private String listSegments(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -597,7 +728,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String listImports(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return listImports(getCurrentProgram(), offset, limit);
+    }
+
+    private String listImports(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -608,7 +742,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String listExports(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return listExports(getCurrentProgram(), offset, limit);
+    }
+
+    private String listExports(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         SymbolTable table = program.getSymbolTable();
@@ -626,7 +763,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String listNamespaces(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return listNamespaces(getCurrentProgram(), offset, limit);
+    }
+
+    private String listNamespaces(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         Set<String> namespaces = new HashSet<>();
@@ -642,7 +782,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String listDefinedData(int offset, int limit) {
-        Program program = getCurrentProgram();
+        return listDefinedData(getCurrentProgram(), offset, limit);
+    }
+
+    private String listDefinedData(Program program, int offset, int limit) {
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -665,7 +808,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String searchFunctionsByName(String searchTerm, int offset, int limit) {
-        Program program = getCurrentProgram();
+        return searchFunctionsByName(getCurrentProgram(), searchTerm, offset, limit);
+    }
+
+    private String searchFunctionsByName(Program program, String searchTerm, int offset, int limit) {
         if (program == null) return "No program loaded";
         if (searchTerm == null || searchTerm.isEmpty()) return "Search term is required";
     
@@ -824,11 +970,14 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String getSymbolAt(String addressStr) {
-        Program program = getCurrentProgram();
+        return getSymbolAt(getCurrentProgram(), addressStr);
+    }
+
+    private String getSymbolAt(Program program, String addressStr) {
         if (program == null) return "failed: get_symbol_at no program loaded";
         if (addressStr == null || addressStr.isBlank()) return "failed: get_symbol_at address is required";
 
-        Address addr = program.getAddressFactory().getAddress(addressStr);
+        Address addr = parseAddress(program, addressStr);
         if (addr == null) return "failed: get_symbol_at invalid address=" + safeValueForResponse(addressStr);
 
         Symbol symbol = program.getSymbolTable().getPrimarySymbol(addr);
@@ -978,12 +1127,16 @@ public class GhidraMCPPlugin extends Plugin {
      * Get function by address
      */
     private String getFunctionByAddress(String addressStr) {
-        Program program = getCurrentProgram();
+        return getFunctionByAddress(getCurrentProgram(), addressStr);
+    }
+
+    private String getFunctionByAddress(Program program, String addressStr) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
+            if (addr == null) return "Invalid address";
             Function func = program.getFunctionManager().getFunctionAt(addr);
 
             if (func == null) return "No function found at address " + addressStr;
@@ -1037,7 +1190,10 @@ public class GhidraMCPPlugin extends Plugin {
      * List all functions in the database
      */
     private String listFunctions() {
-        Program program = getCurrentProgram();
+        return listFunctions(getCurrentProgram());
+    }
+
+    private String listFunctions(Program program) {
         if (program == null) return "No program loaded";
 
         StringBuilder result = new StringBuilder();
@@ -1055,6 +1211,9 @@ public class GhidraMCPPlugin extends Plugin {
      * @return the function or null if not found
      */
     private Function getFunctionForAddress(Program program, Address addr) {
+        if (program == null || addr == null) {
+            return null;
+        }
         Function func = program.getFunctionManager().getFunctionAt(addr);
         if (func == null) {
             func = program.getFunctionManager().getFunctionContaining(addr);
@@ -1062,16 +1221,54 @@ public class GhidraMCPPlugin extends Plugin {
         return func;
     }
 
+    private Address parseAddress(Program program, String addressStr) {
+        if (program == null || addressStr == null || addressStr.isBlank()) {
+            return null;
+        }
+
+        String trimmed = addressStr.trim();
+        Address addr = program.getAddressFactory().getAddress(trimmed);
+        if (addr == null && trimmed.regionMatches(true, 0, "0x", 0, 2)) {
+            addr = program.getAddressFactory().getAddress(trimmed.substring(2));
+        }
+        return addr;
+    }
+
+    private Function resolveFunctionIdentifier(Program program, String identifier) {
+        if (program == null || identifier == null || identifier.isBlank()) {
+            return null;
+        }
+
+        Address addr = parseAddress(program, identifier);
+        if (addr != null) {
+            return getFunctionForAddress(program, addr);
+        }
+
+        Function caseInsensitiveMatch = null;
+        for (Function function : program.getFunctionManager().getFunctions(true)) {
+            if (identifier.equals(function.getName())) {
+                return function;
+            }
+            if (caseInsensitiveMatch == null && identifier.equalsIgnoreCase(function.getName())) {
+                caseInsensitiveMatch = function;
+            }
+        }
+        return caseInsensitiveMatch;
+    }
+
     /**
      * Decompile a function at the given address
      */
     private String decompileFunctionByAddress(String addressStr) {
-        Program program = getCurrentProgram();
+        return decompileFunctionByAddress(getCurrentProgram(), addressStr);
+    }
+
+    private String decompileFunctionByAddress(Program program, String addressStr) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
             Function func = getFunctionForAddress(program, addr);
             if (func == null) return "No function found at or containing address " + addressStr;
 
@@ -1091,12 +1288,15 @@ public class GhidraMCPPlugin extends Plugin {
      * Get assembly code for a function
      */
     private String disassembleFunction(String addressStr) {
-        Program program = getCurrentProgram();
+        return disassembleFunction(getCurrentProgram(), addressStr);
+    }
+
+    private String disassembleFunction(Program program, String addressStr) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
             Function func = getFunctionForAddress(program, addr);
             if (func == null) return "No function found at or containing address " + addressStr;
 
@@ -1210,6 +1410,16 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    @FunctionalInterface
+    private interface ProgramTextQuery {
+        String run(Program program);
+    }
+
+    @FunctionalInterface
+    private interface DualProgramTextQuery {
+        String run(Program leftProgram, Program rightProgram);
+    }
+
     private String trimToNull(String value) {
         if (value == null) {
             return null;
@@ -1233,14 +1443,31 @@ public class GhidraMCPPlugin extends Plugin {
         return normalized;
     }
 
+    private String prefixedParamKey(String prefix, String key) {
+        String normalized = prefix == null ? "" : prefix;
+        return normalized.isEmpty() ? key : normalized + key;
+    }
+
+    private String prefixedSummaryKey(String prefix, String key) {
+        String normalized = prefix == null ? "" : prefix;
+        if (normalized.endsWith("_")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized.isEmpty() ? key : normalized + "_" + key;
+    }
+
     private boolean hasExplicitTargetSelectors(Map<String, String> params) {
+        return hasExplicitTargetSelectors(params, "");
+    }
+
+    private boolean hasExplicitTargetSelectors(Map<String, String> params, String prefix) {
         if (params == null || params.isEmpty()) {
             return false;
         }
-        return trimToNull(params.get("project_dir")) != null ||
-            trimToNull(params.get("project_name")) != null ||
-            trimToNull(params.get("folder_path")) != null ||
-            trimToNull(params.get("program_name")) != null;
+        return trimToNull(params.get(prefixedParamKey(prefix, "project_dir"))) != null ||
+            trimToNull(params.get(prefixedParamKey(prefix, "project_name"))) != null ||
+            trimToNull(params.get(prefixedParamKey(prefix, "folder_path"))) != null ||
+            trimToNull(params.get(prefixedParamKey(prefix, "program_name"))) != null;
     }
 
     private Throwable unwrapReflectionFailure(Exception e) {
@@ -1375,44 +1602,46 @@ public class GhidraMCPPlugin extends Plugin {
         return null;
     }
 
-    private ProgramTargetContext resolveWriteTargetContext(Map<String, String> params) {
-        if (!hasExplicitTargetSelectors(params)) {
+    private ProgramTargetContext resolveTargetContext(Map<String, String> params, String prefix) {
+        if (!hasExplicitTargetSelectors(params, prefix)) {
             Program program = getCurrentProgram();
             if (program == null) {
                 return ProgramTargetContext.error("No program loaded");
             }
-            return ProgramTargetContext.current(program, "current_program=" + program.getName());
+            return ProgramTargetContext.current(
+                program,
+                prefixedSummaryKey(prefix, "current_program") + "=" + program.getName());
         }
 
-        String projectDir = trimToNull(params.get("project_dir"));
-        String projectName = trimToNull(params.get("project_name"));
-        String programName = trimToNull(params.get("program_name"));
-        String folderPath = normalizeFolderPath(params.get("folder_path"));
+        String projectDir = trimToNull(params.get(prefixedParamKey(prefix, "project_dir")));
+        String projectName = trimToNull(params.get(prefixedParamKey(prefix, "project_name")));
+        String programName = trimToNull(params.get(prefixedParamKey(prefix, "program_name")));
+        String folderPath = normalizeFolderPath(params.get(prefixedParamKey(prefix, "folder_path")));
 
         List<String> missing = new ArrayList<>();
         if (projectDir == null) {
-            missing.add("project_dir");
+            missing.add(prefixedParamKey(prefix, "project_dir"));
         }
         if (projectName == null) {
-            missing.add("project_name");
+            missing.add(prefixedParamKey(prefix, "project_name"));
         }
         if (programName == null) {
-            missing.add("program_name");
+            missing.add(prefixedParamKey(prefix, "program_name"));
         }
         if (!missing.isEmpty()) {
             return ProgramTargetContext.error(
                 "Explicit target selection requires: " + String.join(", ", missing));
         }
 
-        String summary = "target_project_dir=" + projectDir + "\n"
-            + "target_project_name=" + projectName + "\n"
-            + "target_folder_path=" + folderPath + "\n"
-            + "target_program_name=" + programName;
+        String summary = prefixedSummaryKey(prefix, "target_project_dir") + "=" + projectDir + "\n"
+            + prefixedSummaryKey(prefix, "target_project_name") + "=" + projectName + "\n"
+            + prefixedSummaryKey(prefix, "target_folder_path") + "=" + folderPath + "\n"
+            + prefixedSummaryKey(prefix, "target_program_name") + "=" + programName;
 
         Program openProgram = findMatchingOpenProgram(projectDir, projectName, folderPath, programName);
         if (openProgram != null) {
             return ProgramTargetContext.current(openProgram,
-                summary + "\n" + "target_resolution=reused_open_program");
+                summary + "\n" + prefixedSummaryKey(prefix, "target_resolution") + "=reused_open_program");
         }
 
         Object ghidraProjectHandle = null;
@@ -1433,7 +1662,7 @@ public class GhidraMCPPlugin extends Plugin {
                 program,
                 ghidraProjectHandle,
                 domainFile,
-                summary + "\n" + "target_resolution=open_writable_domain_object");
+                summary + "\n" + prefixedSummaryKey(prefix, "target_resolution") + "=open_writable_domain_object");
         } catch (Exception e) {
             ghidra.framework.model.Project project = getProjectFromHandle(ghidraProjectHandle);
             if (project != null) {
@@ -1448,6 +1677,14 @@ public class GhidraMCPPlugin extends Plugin {
             Throwable cause = unwrapReflectionFailure(e);
             return ProgramTargetContext.error("Failed to open explicit target: " + cause.getMessage());
         }
+    }
+
+    private ProgramTargetContext resolveWriteTargetContext(Map<String, String> params) {
+        return resolveTargetContext(params, "");
+    }
+
+    private ProgramTargetContext resolveReadTargetContext(Map<String, String> params) {
+        return resolveTargetContext(params, "");
     }
 
     private void closeWriteTargetContext(ProgramTargetContext context) {
@@ -1502,6 +1739,9 @@ public class GhidraMCPPlugin extends Plugin {
         if (context == null) {
             return body;
         }
+        if (!context.explicitTarget) {
+            return body;
+        }
         if (context.targetSummary == null || context.targetSummary.isBlank()) {
             return body;
         }
@@ -1509,6 +1749,65 @@ public class GhidraMCPPlugin extends Plugin {
             return context.targetSummary;
         }
         return context.targetSummary + "\n" + body;
+    }
+
+    private String formatDualTargetedResponse(ProgramTargetContext leftContext,
+                                              ProgramTargetContext rightContext,
+                                              String body) {
+        StringBuilder out = new StringBuilder();
+        if (leftContext != null && leftContext.explicitTarget && leftContext.targetSummary != null && !leftContext.targetSummary.isBlank()) {
+            out.append(leftContext.targetSummary);
+        }
+        if (rightContext != null && rightContext.explicitTarget && rightContext.targetSummary != null && !rightContext.targetSummary.isBlank()) {
+            if (out.length() > 0) {
+                out.append("\n");
+            }
+            out.append(rightContext.targetSummary);
+        }
+        if (body != null && !body.isBlank()) {
+            if (out.length() > 0) {
+                out.append("\n");
+            }
+            out.append(body);
+        }
+        return out.toString();
+    }
+
+    private String withReadTargetContext(Map<String, String> params, ProgramTextQuery query) {
+        ProgramTargetContext context = resolveReadTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        try {
+            return formatTargetedResponse(context, query.run(context.program));
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private String withDualTargetContexts(Map<String, String> params, String leftPrefix,
+                                          String rightPrefix, DualProgramTextQuery query) {
+        ProgramTargetContext leftContext = resolveTargetContext(params, leftPrefix);
+        if (leftContext.hasError()) {
+            return leftContext.errorMessage;
+        }
+
+        ProgramTargetContext rightContext = resolveTargetContext(params, rightPrefix);
+        if (rightContext.hasError()) {
+            closeWriteTargetContext(leftContext);
+            return rightContext.errorMessage;
+        }
+
+        try {
+            return formatDualTargetedResponse(
+                leftContext,
+                rightContext,
+                query.run(leftContext.program, rightContext.program));
+        } finally {
+            closeWriteTargetContext(leftContext);
+            closeWriteTargetContext(rightContext);
+        }
     }
 
     private boolean setCommentAtAddress(String addressStr, String comment, int commentType, String transactionName) {
@@ -1995,12 +2294,15 @@ public class GhidraMCPPlugin extends Plugin {
      * Get all references to a specific address (xref to)
      */
     private String getXrefsTo(String addressStr, int offset, int limit) {
-        Program program = getCurrentProgram();
+        return getXrefsTo(getCurrentProgram(), addressStr, offset, limit);
+    }
+
+    private String getXrefsTo(Program program, String addressStr, int offset, int limit) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
             ReferenceManager refManager = program.getReferenceManager();
             
             ReferenceIterator refIter = refManager.getReferencesTo(addr);
@@ -2037,12 +2339,15 @@ public class GhidraMCPPlugin extends Plugin {
      * Get all references from a specific address (xref from)
      */
     private String getXrefsFrom(String addressStr, int offset, int limit) {
-        Program program = getCurrentProgram();
+        return getXrefsFrom(getCurrentProgram(), addressStr, offset, limit);
+    }
+
+    private String getXrefsFrom(Program program, String addressStr, int offset, int limit) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isEmpty()) return "Address is required";
 
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
             ReferenceManager refManager = program.getReferenceManager();
             
             Reference[] references = refManager.getReferencesFrom(addr);
@@ -2108,36 +2413,27 @@ public class GhidraMCPPlugin extends Plugin {
      * Get all references to a specific function by name
      */
     private String getFunctionXrefs(String functionName, int offset, int limit) {
-        Program program = getCurrentProgram();
+        return getFunctionXrefs(getCurrentProgram(), functionName, offset, limit);
+    }
+
+    private String getFunctionXrefs(Program program, String functionName, int offset, int limit) {
         if (program == null) return "No program loaded";
         if (functionName == null || functionName.isEmpty()) return "Function name is required";
 
         try {
-            List<String> refs = new ArrayList<>();
-            FunctionManager funcManager = program.getFunctionManager();
-            for (Function function : funcManager.getFunctions(true)) {
-                if (function.getName().equals(functionName)) {
-                    Address entryPoint = function.getEntryPoint();
-                    ReferenceIterator refIter = program.getReferenceManager().getReferencesTo(entryPoint);
-                    
-                    while (refIter.hasNext()) {
-                        Reference ref = refIter.next();
-                        Address fromAddr = ref.getFromAddress();
-                        RefType refType = ref.getReferenceType();
-                        
-                        Function fromFunc = funcManager.getFunctionContaining(fromAddr);
-                        String funcInfo = (fromFunc != null) ? " in " + fromFunc.getName() : "";
-                        
-                        refs.add(String.format("From %s%s [%s]", fromAddr, funcInfo, refType.getName()));
-                    }
+            int pageSize = Math.max(1, limit);
+            int fetchLimit = Math.max(pageSize, Math.min(Math.max(0, offset) + pageSize, 1000));
+            String callers = getCallers(program, functionName, true, true, true, fetchLimit);
+            List<String> lines = new ArrayList<>();
+            for (String line : callers.split("\\r?\\n")) {
+                if (line.startsWith("from=")) {
+                    lines.add(line);
                 }
             }
-            
-            if (refs.isEmpty()) {
-                return "No references found to function: " + functionName;
+            if (lines.isEmpty()) {
+                return callers;
             }
-            
-            return paginateList(refs, offset, limit);
+            return paginateList(lines, offset, limit);
         } catch (Exception e) {
             return "Error getting function references: " + e.getMessage();
         }
@@ -2147,7 +2443,10 @@ public class GhidraMCPPlugin extends Plugin {
  * List all defined strings in the program with their addresses
  */
     private String listDefinedStrings(int offset, int limit, String filter) {
-        Program program = getCurrentProgram();
+        return listDefinedStrings(getCurrentProgram(), offset, limit, filter);
+    }
+
+    private String listDefinedStrings(Program program, int offset, int limit, String filter) {
         if (program == null) return "No program loaded";
 
         List<String> lines = new ArrayList<>();
@@ -2417,12 +2716,15 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String getFunctionContaining(String addressStr) {
-        Program program = getCurrentProgram();
+        return getFunctionContaining(getCurrentProgram(), addressStr);
+    }
+
+    private String getFunctionContaining(Program program, String addressStr) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isBlank()) return "address is required";
 
         try {
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
             if (addr == null) return "Invalid address";
             Function func = program.getFunctionManager().getFunctionContaining(addr);
             if (func == null) return "No function contains address " + addressStr;
@@ -2438,13 +2740,16 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String readRegion(String startStr, String endStr) {
-        Program program = getCurrentProgram();
+        return readRegion(getCurrentProgram(), startStr, endStr);
+    }
+
+    private String readRegion(Program program, String startStr, String endStr) {
         if (program == null) return "No program loaded";
         if (startStr == null || endStr == null) return "start and end are required";
 
         try {
-            Address start = program.getAddressFactory().getAddress(startStr);
-            Address end = program.getAddressFactory().getAddress(endStr);
+            Address start = parseAddress(program, startStr);
+            Address end = parseAddress(program, endStr);
             if (start == null || end == null) return "Invalid start or end address";
             if (end.compareTo(start) < 0) return "end must be >= start";
 
@@ -2488,13 +2793,16 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String disassembleRegion(String startStr, String endStr) {
-        Program program = getCurrentProgram();
+        return disassembleRegion(getCurrentProgram(), startStr, endStr);
+    }
+
+    private String disassembleRegion(Program program, String startStr, String endStr) {
         if (program == null) return "No program loaded";
         if (startStr == null || endStr == null) return "start and end are required";
 
         try {
-            Address start = program.getAddressFactory().getAddress(startStr);
-            Address end = program.getAddressFactory().getAddress(endStr);
+            Address start = parseAddress(program, startStr);
+            Address end = parseAddress(program, endStr);
             if (start == null || end == null) return "Invalid start or end address";
             if (end.compareTo(start) < 0) return "end must be >= start";
 
@@ -2516,13 +2824,16 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String getInstructionWindow(String addressStr, int beforeCount, int afterCount) {
-        Program program = getCurrentProgram();
+        return getInstructionWindow(getCurrentProgram(), addressStr, beforeCount, afterCount);
+    }
+
+    private String getInstructionWindow(Program program, String addressStr, int beforeCount, int afterCount) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isBlank()) return "address is required";
 
         try {
             Listing listing = program.getListing();
-            Address addr = program.getAddressFactory().getAddress(addressStr);
+            Address addr = parseAddress(program, addressStr);
             if (addr == null) return "Invalid address";
 
             Instruction center = listing.getInstructionContaining(addr);
@@ -2564,7 +2875,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String searchInstructions(String query, String mode, int limit) {
-        Program program = getCurrentProgram();
+        return searchInstructions(getCurrentProgram(), query, mode, limit);
+    }
+
+    private String searchInstructions(Program program, String query, String mode, int limit) {
         if (program == null) return "No program loaded";
         if (query == null || query.isBlank()) return "query is required";
 
@@ -2636,13 +2950,16 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private String getDataUses(String addressStr, boolean includeOperandScans, int limit) {
-        Program program = getCurrentProgram();
+        return getDataUses(getCurrentProgram(), addressStr, includeOperandScans, limit);
+    }
+
+    private String getDataUses(Program program, String addressStr, boolean includeOperandScans, int limit) {
         if (program == null) return "No program loaded";
         if (addressStr == null || addressStr.isBlank()) return "address is required";
 
         LinkedHashSet<String> uses = new LinkedHashSet<>();
 
-        String xrefs = getXrefsTo(addressStr, 0, Math.max(1, limit));
+        String xrefs = getXrefsTo(program, addressStr, 0, Math.max(1, limit));
         if (xrefs != null && !xrefs.isBlank()) {
             for (String line : xrefs.split("\\r?\\n")) {
                 if (!line.isBlank()) {
@@ -2652,7 +2969,7 @@ public class GhidraMCPPlugin extends Plugin {
         }
 
         if (includeOperandScans && uses.size() < limit) {
-            String scanned = searchInstructions(addressStr, "address", limit);
+            String scanned = searchInstructions(program, addressStr, "address", limit);
             if (scanned != null && !scanned.isBlank() && !scanned.startsWith("No matching")) {
                 for (String line : scanned.split("\\r?\\n")) {
                     if (!line.isBlank()) {
@@ -2669,6 +2986,889 @@ public class GhidraMCPPlugin extends Plugin {
             return "No uses found for " + addressStr;
         }
         return String.join("\n", uses);
+    }
+
+    private String searchBytes(Program program, String patternText, String startStr,
+                               String endStr, String segmentFilter, int maxHits) {
+        if (program == null) return "No program loaded";
+        if (patternText == null || patternText.isBlank()) return "pattern is required";
+
+        int[] pattern;
+        try {
+            pattern = parseBytePattern(patternText);
+        } catch (IllegalArgumentException e) {
+            return "Invalid pattern: " + e.getMessage();
+        }
+
+        Address requestedStart = startStr == null || startStr.isBlank() ? null : parseAddress(program, startStr);
+        Address requestedEnd = endStr == null || endStr.isBlank() ? null : parseAddress(program, endStr);
+        if ((startStr != null && !startStr.isBlank() && requestedStart == null) ||
+            (endStr != null && !endStr.isBlank() && requestedEnd == null)) {
+            return "Invalid start or end address";
+        }
+        if (requestedStart != null && requestedEnd != null && requestedEnd.compareTo(requestedStart) < 0) {
+            return "end must be >= start";
+        }
+
+        int hitLimit = Math.max(1, Math.min(maxHits, 1000));
+        String filter = trimToNull(segmentFilter);
+        if (filter != null) {
+            filter = filter.toLowerCase(Locale.ROOT);
+        }
+
+        List<String> hits = new ArrayList<>();
+        for (MemoryBlock block : program.getMemory().getBlocks()) {
+            if (filter != null && !block.getName().toLowerCase(Locale.ROOT).contains(filter)) {
+                continue;
+            }
+
+            Address searchStart = block.getStart();
+            Address searchEnd = block.getEnd();
+            if (requestedStart != null && searchStart.compareTo(requestedStart) < 0) {
+                searchStart = requestedStart;
+            }
+            if (requestedEnd != null && searchEnd.compareTo(requestedEnd) > 0) {
+                searchEnd = requestedEnd;
+            }
+            if (searchEnd.compareTo(searchStart) < 0) {
+                continue;
+            }
+
+            long sizeLong = searchEnd.subtract(searchStart) + 1;
+            if (sizeLong < pattern.length || sizeLong > Integer.MAX_VALUE) {
+                continue;
+            }
+
+            byte[] data = new byte[(int) sizeLong];
+            int bytesRead;
+            try {
+                bytesRead = program.getMemory().getBytes(searchStart, data);
+            } catch (MemoryAccessException e) {
+                continue;
+            }
+            if (bytesRead < pattern.length) {
+                continue;
+            }
+
+            for (int index = 0; index <= bytesRead - pattern.length && hits.size() < hitLimit; index++) {
+                if (!matchesBytePattern(data, index, pattern)) {
+                    continue;
+                }
+                Address hitAddress = searchStart.add(index);
+                hits.add(String.format(
+                    "hit=%s\tblock=%s\tcontext=%s",
+                    hitAddress,
+                    block.getName(),
+                    formatByteContext(data, index, pattern.length, 6)));
+            }
+
+            if (hits.size() >= hitLimit) {
+                break;
+            }
+        }
+
+        if (hits.isEmpty()) {
+            return "No byte-pattern hits found";
+        }
+
+        return "pattern=" + patternText.trim() + "\n"
+            + "hits=" + hits.size() + "\n"
+            + String.join("\n", hits);
+    }
+
+    private int[] parseBytePattern(String patternText) {
+        String normalized = patternText.trim().replace(',', ' ');
+        List<String> tokens = new ArrayList<>();
+        if (normalized.contains(" ") || normalized.contains("\t")) {
+            for (String token : normalized.split("\\s+")) {
+                if (!token.isBlank()) {
+                    tokens.add(token);
+                }
+            }
+        } else {
+            String compact = normalized.replace("0x", "").replace("0X", "");
+            if ((compact.length() & 1) != 0) {
+                throw new IllegalArgumentException("compact patterns must contain an even number of hex digits");
+            }
+            for (int index = 0; index < compact.length(); index += 2) {
+                tokens.add(compact.substring(index, index + 2));
+            }
+        }
+
+        if (tokens.isEmpty()) {
+            throw new IllegalArgumentException("pattern is empty");
+        }
+
+        int[] pattern = new int[tokens.size()];
+        for (int index = 0; index < tokens.size(); index++) {
+            String token = tokens.get(index).trim();
+            if (token.equals("??") || token.equals("**")) {
+                pattern[index] = -1;
+                continue;
+            }
+
+            token = token.replace("0x", "").replace("0X", "");
+            if (!token.matches("[0-9a-fA-F]{2}")) {
+                throw new IllegalArgumentException("invalid byte token '" + token + "'");
+            }
+            pattern[index] = Integer.parseInt(token, 16);
+        }
+        return pattern;
+    }
+
+    private boolean matchesBytePattern(byte[] data, int offset, int[] pattern) {
+        for (int index = 0; index < pattern.length; index++) {
+            int expected = pattern[index];
+            if (expected >= 0 && (data[offset + index] & 0xff) != expected) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private String formatByteContext(byte[] data, int offset, int patternLength, int radius) {
+        int start = Math.max(0, offset - radius);
+        int end = Math.min(data.length, offset + patternLength + radius);
+        StringBuilder out = new StringBuilder();
+        for (int index = start; index < end; index++) {
+            if (out.length() > 0) {
+                out.append(' ');
+            }
+            if (index == offset) {
+                out.append('[');
+            }
+            out.append(String.format("%02x", data[index] & 0xff));
+            if (index == offset + patternLength - 1) {
+                out.append(']');
+            }
+        }
+        return out.toString();
+    }
+
+    private String getCallers(Program program, String targetIdentifier, boolean includeNear,
+                              boolean includeFar, boolean includeJumps, int limit) {
+        if (program == null) return "No program loaded";
+        if (targetIdentifier == null || targetIdentifier.isBlank()) return "target is required";
+
+        Function targetFunction = resolveFunctionIdentifier(program, targetIdentifier);
+        if (targetFunction == null) {
+            return "No function found for target " + targetIdentifier;
+        }
+
+        int maxResults = Math.max(1, Math.min(limit, 1000));
+        LinkedHashMap<String, String> results = new LinkedHashMap<>();
+        Address entry = targetFunction.getEntryPoint();
+
+        ReferenceIterator refIter = program.getReferenceManager().getReferencesTo(entry);
+        while (refIter.hasNext() && results.size() < maxResults) {
+            Reference ref = refIter.next();
+            RefType refType = ref.getReferenceType();
+            if (!includeRefType(refType, includeJumps)) {
+                continue;
+            }
+            if (!includeCallScope(refType, includeNear, includeFar)) {
+                continue;
+            }
+            Address fromAddr = ref.getFromAddress();
+            results.putIfAbsent(
+                fromAddr.toString(),
+                formatCallerLine(program, fromAddr, entry, targetFunction, refType, "xref"));
+        }
+
+        InstructionIterator it = program.getListing().getInstructions(true);
+        while (it.hasNext() && results.size() < maxResults) {
+            Instruction instruction = it.next();
+            String kind = classifyInstructionKind(instruction);
+            if (kind.equals("other")) {
+                continue;
+            }
+            if (kind.equals("jump") && !includeJumps) {
+                continue;
+            }
+            if (kind.equals("call") && !includeNear && !includeFar) {
+                continue;
+            }
+
+            Address[] flows = instruction.getFlows();
+            if (flows == null || flows.length == 0) {
+                continue;
+            }
+            for (Address flow : flows) {
+                if (!entry.equals(flow)) {
+                    continue;
+                }
+                String key = instruction.getAddress().toString();
+                results.putIfAbsent(
+                    key,
+                    formatCallerLine(program, instruction.getAddress(), entry, targetFunction,
+                        instruction.getFlowType(), "instruction_scan"));
+                break;
+            }
+        }
+
+        if (results.isEmpty()) {
+            return "No callers found for " + targetFunction.getName();
+        }
+
+        return "target_function=" + targetFunction.getName() + "\n"
+            + "target_entry=" + targetFunction.getEntryPoint() + "\n"
+            + String.join("\n", results.values());
+    }
+
+    private boolean includeRefType(RefType refType, boolean includeJumps) {
+        if (refType == null) {
+            return false;
+        }
+        if (refType.isCall()) {
+            return true;
+        }
+        return includeJumps && refType.isJump();
+    }
+
+    private boolean includeCallScope(RefType refType, boolean includeNear, boolean includeFar) {
+        if (refType == null || !refType.isCall()) {
+            return true;
+        }
+        String name = refType.getName().toLowerCase(Locale.ROOT);
+        boolean isFar = name.contains("far") || name.contains("external");
+        if (isFar) {
+            return includeFar;
+        }
+        return includeNear;
+    }
+
+    private String classifyInstructionKind(Instruction instruction) {
+        if (instruction == null) {
+            return "other";
+        }
+        RefType flowType = instruction.getFlowType();
+        if (flowType != null) {
+            if (flowType.isCall()) {
+                return "call";
+            }
+            if (flowType.isJump()) {
+                return "jump";
+            }
+        }
+        String mnemonic = instruction.getMnemonicString().toLowerCase(Locale.ROOT);
+        if (mnemonic.startsWith("call")) {
+            return "call";
+        }
+        if (mnemonic.startsWith("jmp") || mnemonic.startsWith("j")) {
+            return "jump";
+        }
+        return "other";
+    }
+
+    private String formatCallerLine(Program program, Address fromAddr, Address toAddr,
+                                    Function targetFunction, RefType refType, String source) {
+        Function fromFunction = program.getFunctionManager().getFunctionContaining(fromAddr);
+        String refName = refType == null ? "<none>" : refType.getName();
+        return String.format(
+            "from=%s\tfrom_function=%s\tto=%s\tto_function=%s\tref_type=%s\tref_kind=%s\tsource=%s",
+            fromAddr,
+            safeFunctionName(fromFunction),
+            toAddr,
+            safeFunctionName(targetFunction),
+            refName,
+            classifyRefKind(refType),
+            source);
+    }
+
+    private String listProjectPrograms(String projectDir, String projectName,
+                                       String folderPath, boolean recursive) {
+        String resolvedProjectDir = trimToNull(projectDir);
+        String resolvedProjectName = trimToNull(projectName);
+        String resolvedFolderPath = normalizeFolderPath(folderPath);
+
+        if (resolvedProjectDir == null || resolvedProjectName == null) {
+            Program currentProgram = getCurrentProgram();
+            if (currentProgram != null && currentProgram.getDomainFile() != null &&
+                currentProgram.getDomainFile().getProjectLocator() != null) {
+                ghidra.framework.model.ProjectLocator locator = currentProgram.getDomainFile().getProjectLocator();
+                if (resolvedProjectDir == null) {
+                    resolvedProjectDir = locator.getLocation();
+                }
+                if (resolvedProjectName == null) {
+                    resolvedProjectName = locator.getName();
+                }
+            }
+        }
+
+        if (resolvedProjectDir == null || resolvedProjectName == null) {
+            return "project_dir and project_name are required when no current project is available";
+        }
+
+        Object ghidraProjectHandle = null;
+        try {
+            ghidraProjectHandle = openExplicitProjectHandle(resolvedProjectDir, resolvedProjectName);
+            ghidra.framework.model.ProjectData projectData = getProjectDataFromHandle(ghidraProjectHandle);
+            if (projectData == null) {
+                return "Failed to resolve project data";
+            }
+
+            ghidra.framework.model.DomainFolder folder = "/".equals(resolvedFolderPath)
+                ? projectData.getRootFolder()
+                : projectData.getFolder(resolvedFolderPath);
+            if (folder == null) {
+                return "No folder found at " + resolvedFolderPath;
+            }
+
+            List<String> lines = new ArrayList<>();
+            collectProjectPrograms(folder, recursive, lines);
+            Collections.sort(lines);
+
+            int programCount = 0;
+            int folderCount = 0;
+            for (String line : lines) {
+                if (line.startsWith("entry_type=program\t")) {
+                    programCount++;
+                } else if (line.startsWith("entry_type=folder\t")) {
+                    folderCount++;
+                }
+            }
+
+            StringBuilder out = new StringBuilder();
+            out.append("project_dir=").append(resolvedProjectDir).append("\n")
+                .append("project_name=").append(resolvedProjectName).append("\n")
+                .append("folder_path=").append(resolvedFolderPath).append("\n")
+                .append("recursive=").append(recursive).append("\n")
+                .append("folder_count=").append(folderCount).append("\n")
+                .append("program_count=").append(programCount);
+            if (!lines.isEmpty()) {
+                out.append("\n").append(String.join("\n", lines));
+            }
+            return out.toString();
+        } catch (Exception e) {
+            Throwable cause = unwrapReflectionFailure(e);
+            return "Failed to list project programs: " + cause.getMessage();
+        } finally {
+            ghidra.framework.model.Project project = getProjectFromHandle(ghidraProjectHandle);
+            if (project != null) {
+                try {
+                    if (!project.isClosed()) {
+                        project.close();
+                    }
+                } catch (Exception e) {
+                    Msg.debug(this, "Failed to close project after inventory listing", e);
+                }
+            }
+        }
+    }
+
+    private void collectProjectPrograms(ghidra.framework.model.DomainFolder folder, boolean recursive,
+                                        List<String> lines) {
+        String folderPath = normalizeFolderPath(folder.getPathname());
+        lines.add(String.format(
+            "entry_type=folder\tfolder_path=%s\tname=%s",
+            folderPath,
+            safeValueForResponse(folder.getName())));
+
+        for (ghidra.framework.model.DomainFile file : folder.getFiles()) {
+            String parentPath = file.getParent() == null ? "/" : normalizeFolderPath(file.getParent().getPathname());
+            boolean currentlyOpen = false;
+            try {
+                currentlyOpen = file.getOpenedDomainObject(this) != null;
+            } catch (Exception ignored) {
+                // Best-effort only.
+            }
+            lines.add(String.format(
+                "entry_type=program\tfolder_path=%s\tprogram_name=%s\tcontent_type=%s\tread_only=%s\tversioned=%s\tcurrently_open=%s",
+                parentPath,
+                file.getName(),
+                safeValueForResponse(file.getContentType()),
+                file.isReadOnly(),
+                file.isVersioned(),
+                currentlyOpen));
+        }
+
+        if (!recursive) {
+            return;
+        }
+
+        for (ghidra.framework.model.DomainFolder child : folder.getFolders()) {
+            collectProjectPrograms(child, true, lines);
+        }
+    }
+
+    private String compareRegions(Program leftProgram, Program rightProgram,
+                                  String leftStartStr, String leftEndStr,
+                                  String rightStartStr, String rightEndStr,
+                                  String mode, int maxDiffs) {
+        if (leftProgram == null || rightProgram == null) {
+            return "Both left and right programs are required";
+        }
+
+        Address leftStart = parseAddress(leftProgram, leftStartStr);
+        Address leftEnd = parseAddress(leftProgram, leftEndStr);
+        Address rightStart = parseAddress(rightProgram, rightStartStr);
+        Address rightEnd = parseAddress(rightProgram, rightEndStr);
+        if (leftStart == null || leftEnd == null || rightStart == null || rightEnd == null) {
+            return "left_start, left_end, right_start, and right_end must all be valid addresses";
+        }
+
+        String compareMode = normalizeWhitespace(mode).isBlank() ? "bytes" : normalizeWhitespace(mode).toLowerCase(Locale.ROOT);
+        int diffLimit = Math.max(1, Math.min(maxDiffs, 500));
+        if (compareMode.equals("bytes") || compareMode.equals("words")) {
+            return compareByteRegions(leftProgram, rightProgram, leftStart, leftEnd, rightStart, rightEnd,
+                compareMode.equals("words") ? 2 : 1, compareMode, diffLimit);
+        }
+        if (compareMode.equals("disasm")) {
+            return buildTextComparisonReport(
+                compareMode,
+                disassembleRegion(leftProgram, leftStart.toString(), leftEnd.toString()),
+                disassembleRegion(rightProgram, rightStart.toString(), rightEnd.toString()),
+                diffLimit);
+        }
+        if (compareMode.equals("strings")) {
+            return compareStringLists(
+                compareMode,
+                collectStringsInRange(leftProgram, leftStart, leftEnd, Integer.MAX_VALUE),
+                collectStringsInRange(rightProgram, rightStart, rightEnd, Integer.MAX_VALUE),
+                diffLimit);
+        }
+        return "Unsupported compare mode: " + compareMode;
+    }
+
+    private String compareByteRegions(Program leftProgram, Program rightProgram,
+                                      Address leftStart, Address leftEnd,
+                                      Address rightStart, Address rightEnd,
+                                      int unitSize, String mode, int maxDiffs) {
+        byte[] leftBytes;
+        byte[] rightBytes;
+        try {
+            leftBytes = readBytes(leftProgram, leftStart, leftEnd, 1024 * 1024);
+            rightBytes = readBytes(rightProgram, rightStart, rightEnd, 1024 * 1024);
+        } catch (IOException e) {
+            return "Failed to read comparison regions: " + e.getMessage();
+        }
+
+        int leftUnits = leftBytes.length / unitSize;
+        int rightUnits = rightBytes.length / unitSize;
+        int totalUnits = Math.max(leftUnits, rightUnits);
+        int comparableUnits = Math.min(leftUnits, rightUnits);
+        int equalUnits = 0;
+        List<String> diffs = new ArrayList<>();
+
+        for (int index = 0; index < comparableUnits; index++) {
+            boolean equal = true;
+            for (int step = 0; step < unitSize; step++) {
+                if (leftBytes[index * unitSize + step] != rightBytes[index * unitSize + step]) {
+                    equal = false;
+                    break;
+                }
+            }
+
+            if (equal) {
+                equalUnits++;
+                continue;
+            }
+            if (diffs.size() < maxDiffs) {
+                diffs.add(String.format(
+                    "offset=0x%x\tleft=%s\tright=%s",
+                    index * unitSize,
+                    formatUnitHex(leftBytes, index * unitSize, unitSize),
+                    formatUnitHex(rightBytes, index * unitSize, unitSize)));
+            }
+        }
+
+        if (leftUnits != rightUnits && diffs.size() < maxDiffs) {
+            diffs.add("length_mismatch left_units=" + leftUnits + " right_units=" + rightUnits);
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("comparison_mode=").append(mode).append("\n")
+            .append("left_size=").append(leftBytes.length).append("\n")
+            .append("right_size=").append(rightBytes.length).append("\n")
+            .append("equal_units=").append(equalUnits).append("\n")
+            .append("total_units=").append(totalUnits).append("\n")
+            .append("similarity=").append(formatSimilarity(equalUnits, totalUnits));
+        if (!diffs.isEmpty()) {
+            out.append("\n").append(String.join("\n", diffs));
+        }
+        return out.toString();
+    }
+
+    private String compareStrings(Program leftProgram, Program rightProgram, String filter, int maxResults) {
+        if (leftProgram == null || rightProgram == null) {
+            return "Both left and right programs are required";
+        }
+        return compareStringLists(
+            "strings",
+            collectProgramStrings(leftProgram, filter, Math.max(1, Math.min(maxResults, 5000))),
+            collectProgramStrings(rightProgram, filter, Math.max(1, Math.min(maxResults, 5000))),
+            Math.max(1, Math.min(maxResults, 500)));
+    }
+
+    private String compareFunctions(Program leftProgram, Program rightProgram,
+                                    String leftFunctionId, String rightFunctionId,
+                                    String mode, int limit) {
+        if (leftProgram == null || rightProgram == null) {
+            return "Both left and right programs are required";
+        }
+
+        Function leftFunction = resolveFunctionIdentifier(leftProgram, leftFunctionId);
+        Function rightFunction = resolveFunctionIdentifier(rightProgram, rightFunctionId);
+        if (leftFunction == null || rightFunction == null) {
+            return "Both left_function and right_function must resolve to a function";
+        }
+
+        String compareMode = normalizeWhitespace(mode).isBlank() ? "signature" : normalizeWhitespace(mode).toLowerCase(Locale.ROOT);
+        String header = "left_function=" + leftFunction.getName() + "@" + leftFunction.getEntryPoint() + "\n"
+            + "right_function=" + rightFunction.getName() + "@" + rightFunction.getEntryPoint();
+
+        if (compareMode.equals("signature")) {
+            return header + "\n" + buildTextComparisonReport(
+                compareMode,
+                leftFunction.getSignature().toString(),
+                rightFunction.getSignature().toString(),
+                Math.max(1, Math.min(limit, 100)));
+        }
+        if (compareMode.equals("disasm")) {
+            return header + "\n" + buildTextComparisonReport(
+                compareMode,
+                disassembleFunction(leftProgram, leftFunction.getEntryPoint().toString()),
+                disassembleFunction(rightProgram, rightFunction.getEntryPoint().toString()),
+                Math.max(1, Math.min(limit, 200)));
+        }
+        if (compareMode.equals("decompile")) {
+            return header + "\n" + buildTextComparisonReport(
+                compareMode,
+                decompileFunctionByAddress(leftProgram, leftFunction.getEntryPoint().toString()),
+                decompileFunctionByAddress(rightProgram, rightFunction.getEntryPoint().toString()),
+                Math.max(1, Math.min(limit, 200)));
+        }
+        if (compareMode.equals("xrefs")) {
+            return header + "\n" + buildTextComparisonReport(
+                compareMode,
+                getCallers(leftProgram, leftFunction.getEntryPoint().toString(), true, true, true, limit),
+                getCallers(rightProgram, rightFunction.getEntryPoint().toString(), true, true, true, limit),
+                Math.max(1, Math.min(limit, 200)));
+        }
+        return "Unsupported compare mode: " + compareMode;
+    }
+
+    private String portSymbols(Map<String, String> params, String mappings, String apply,
+                               String provenanceCommentTemplate, boolean dryRun) {
+        if (mappings == null || mappings.isBlank()) {
+            return "mappings is required";
+        }
+
+        ProgramTargetContext sourceContext = resolveTargetContext(params, "source_");
+        if (sourceContext.hasError()) {
+            return sourceContext.errorMessage;
+        }
+
+        ProgramTargetContext targetContext = resolveTargetContext(params, "target_");
+        if (targetContext.hasError()) {
+            closeWriteTargetContext(sourceContext);
+            return targetContext.errorMessage;
+        }
+
+        String applyMode = normalizeWhitespace(apply).isBlank() ? "both" : normalizeWhitespace(apply).toLowerCase(Locale.ROOT);
+        boolean applyNames = applyMode.equals("both") || applyMode.equals("names");
+        boolean applyComments = applyMode.equals("both") || applyMode.equals("comments");
+        if (!applyNames && !applyComments) {
+            closeWriteTargetContext(sourceContext);
+            closeWriteTargetContext(targetContext);
+            return "apply must be one of: names, comments, both";
+        }
+
+        AtomicBoolean committed = new AtomicBoolean(false);
+        List<String> lines = new ArrayList<>();
+
+        try {
+            int tx = targetContext.program.startTransaction("Port symbols");
+            try {
+                for (String line : mappings.split("\\r?\\n")) {
+                    if (line.isBlank()) {
+                        continue;
+                    }
+                    String[] parts = line.split("\\t");
+                    if (parts.length < 2) {
+                        lines.add("status=invalid_mapping\tline=" + safeValueForResponse(line));
+                        continue;
+                    }
+
+                    Address sourceAddr = parseAddress(sourceContext.program, parts[0].trim());
+                    Address targetAddr = parseAddress(targetContext.program, parts[1].trim());
+                    if (sourceAddr == null || targetAddr == null) {
+                        lines.add("status=invalid_address\tsource=" + safeValueForResponse(parts[0])
+                            + "\ttarget=" + safeValueForResponse(parts[1]));
+                        continue;
+                    }
+
+                    Symbol sourceSymbol = sourceContext.program.getSymbolTable().getPrimarySymbol(sourceAddr);
+                    String sourcePre = sourceContext.program.getListing().getComment(CodeUnit.PRE_COMMENT, sourceAddr);
+                    String sourceEol = sourceContext.program.getListing().getComment(CodeUnit.EOL_COMMENT, sourceAddr);
+
+                    if (sourceSymbol == null && !applyComments) {
+                        lines.add("status=no_source_symbol\tsource=" + sourceAddr + "\ttarget=" + targetAddr);
+                        continue;
+                    }
+
+                    if (!dryRun) {
+                        if (applyNames && sourceSymbol != null) {
+                            Symbol targetSymbol = targetContext.program.getSymbolTable().getPrimarySymbol(targetAddr);
+                            if (targetSymbol != null) {
+                                targetSymbol.setName(sourceSymbol.getName(), SourceType.USER_DEFINED);
+                            } else {
+                                targetContext.program.getSymbolTable().createLabel(
+                                    targetAddr, sourceSymbol.getName(), SourceType.USER_DEFINED);
+                            }
+                        }
+                        if (applyComments) {
+                            if (sourcePre != null && !sourcePre.isBlank()) {
+                                targetContext.program.getListing().setComment(
+                                    targetAddr, CodeUnit.PRE_COMMENT,
+                                    appendProvenance(sourcePre, provenanceCommentTemplate,
+                                        sourceContext.program, targetContext.program,
+                                        sourceAddr, targetAddr, sourceSymbol));
+                            }
+                            if (sourceEol != null && !sourceEol.isBlank()) {
+                                targetContext.program.getListing().setComment(
+                                    targetAddr, CodeUnit.EOL_COMMENT,
+                                    appendProvenance(sourceEol, provenanceCommentTemplate,
+                                        sourceContext.program, targetContext.program,
+                                        sourceAddr, targetAddr, sourceSymbol));
+                            }
+                        }
+                    }
+
+                    lines.add("status=" + (dryRun ? "dry_run" : "applied")
+                        + "\tsource=" + sourceAddr
+                        + "\ttarget=" + targetAddr
+                        + "\tname=" + safeValueForResponse(sourceSymbol != null ? sourceSymbol.getName() : "<none>")
+                        + "\tported_comments=" + applyComments);
+                }
+                committed.set(!dryRun);
+            } finally {
+                targetContext.program.endTransaction(tx, committed.get());
+            }
+
+            String response = formatDualTargetedResponse(
+                sourceContext,
+                targetContext,
+                "apply_mode=" + applyMode + "\n"
+                    + "dry_run=" + dryRun + "\n"
+                    + String.join("\n", lines));
+            if (!dryRun && committed.get() && targetContext.explicitTarget) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(targetContext);
+            }
+            return response;
+        } catch (Exception e) {
+            return "Failed to port symbols: " + e.getMessage();
+        } finally {
+            closeWriteTargetContext(sourceContext);
+            closeWriteTargetContext(targetContext);
+        }
+    }
+
+    private String appendProvenance(String baseComment, String template,
+                                    Program sourceProgram, Program targetProgram,
+                                    Address sourceAddr, Address targetAddr, Symbol sourceSymbol) {
+        String provenance = trimToNull(template);
+        if (provenance == null) {
+            provenance = "ported_from={source_program}@{source_address}";
+        }
+        provenance = provenance
+            .replace("{source_program}", sourceProgram.getName())
+            .replace("{target_program}", targetProgram.getName())
+            .replace("{source_address}", sourceAddr.toString())
+            .replace("{target_address}", targetAddr.toString())
+            .replace("{symbol}", sourceSymbol == null ? "<none>" : sourceSymbol.getName());
+        if (baseComment == null || baseComment.isBlank()) {
+            return provenance;
+        }
+        if (baseComment.contains(provenance)) {
+            return baseComment;
+        }
+        return baseComment + "\n" + provenance;
+    }
+
+    private byte[] readBytes(Program program, Address start, Address end, int maxBytes) throws IOException {
+        long sizeLong = end.subtract(start) + 1;
+        if (sizeLong <= 0 || sizeLong > maxBytes) {
+            throw new IOException("requested region size is out of supported range (1.." + maxBytes + " bytes)");
+        }
+        byte[] data = new byte[(int) sizeLong];
+        try {
+            int bytesRead = program.getMemory().getBytes(start, data);
+            if (bytesRead != data.length) {
+                return Arrays.copyOf(data, Math.max(0, bytesRead));
+            }
+            return data;
+        } catch (MemoryAccessException e) {
+            throw new IOException(e.getMessage(), e);
+        }
+    }
+
+    private String formatUnitHex(byte[] data, int offset, int unitSize) {
+        StringBuilder out = new StringBuilder();
+        for (int index = 0; index < unitSize && offset + index < data.length; index++) {
+            if (index > 0) {
+                out.append(' ');
+            }
+            out.append(String.format("%02x", data[offset + index] & 0xff));
+        }
+        return out.toString();
+    }
+
+    private String buildTextComparisonReport(String mode, String leftBody, String rightBody, int maxDiffs) {
+        List<String> leftLines = normalizeComparisonLines(leftBody);
+        List<String> rightLines = normalizeComparisonLines(rightBody);
+        LinkedHashSet<String> leftSet = new LinkedHashSet<>(leftLines);
+        LinkedHashSet<String> rightSet = new LinkedHashSet<>(rightLines);
+
+        int shared = 0;
+        for (String line : leftSet) {
+            if (rightSet.contains(line)) {
+                shared++;
+            }
+        }
+
+        List<String> leftOnly = new ArrayList<>();
+        for (String line : leftSet) {
+            if (!rightSet.contains(line)) {
+                leftOnly.add("left_only=" + line);
+                if (leftOnly.size() >= maxDiffs) {
+                    break;
+                }
+            }
+        }
+
+        List<String> rightOnly = new ArrayList<>();
+        for (String line : rightSet) {
+            if (!leftSet.contains(line)) {
+                rightOnly.add("right_only=" + line);
+                if (rightOnly.size() >= maxDiffs) {
+                    break;
+                }
+            }
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("comparison_mode=").append(mode).append("\n")
+            .append("left_items=").append(leftSet.size()).append("\n")
+            .append("right_items=").append(rightSet.size()).append("\n")
+            .append("shared_items=").append(shared).append("\n")
+            .append("similarity=").append(formatSimilarity(shared, leftSet.size() + rightSet.size() - shared));
+        if (!leftOnly.isEmpty()) {
+            out.append("\n").append(String.join("\n", leftOnly));
+        }
+        if (!rightOnly.isEmpty()) {
+            out.append("\n").append(String.join("\n", rightOnly));
+        }
+        return out.toString();
+    }
+
+    private List<String> normalizeComparisonLines(String body) {
+        List<String> lines = new ArrayList<>();
+        if (body == null || body.isBlank()) {
+            return lines;
+        }
+        for (String line : body.split("\\r?\\n")) {
+            String normalized = line.trim();
+            if (!normalized.isEmpty()) {
+                lines.add(normalized);
+            }
+        }
+        return lines;
+    }
+
+    private String formatSimilarity(int numerator, int denominator) {
+        if (denominator <= 0) {
+            return "1.000";
+        }
+        return String.format(Locale.ROOT, "%.3f", (double) numerator / (double) denominator);
+    }
+
+    private List<String> collectProgramStrings(Program program, String filter, int maxResults) {
+        List<String> lines = new ArrayList<>();
+        String loweredFilter = filter == null ? null : filter.toLowerCase(Locale.ROOT);
+        DataIterator dataIt = program.getListing().getDefinedData(true);
+        while (dataIt.hasNext() && lines.size() < maxResults) {
+            Data data = dataIt.next();
+            if (!isStringData(data)) {
+                continue;
+            }
+            String value = data.getValue() != null ? data.getValue().toString() : "";
+            if (loweredFilter != null && !value.toLowerCase(Locale.ROOT).contains(loweredFilter)) {
+                continue;
+            }
+            lines.add(String.format("%s\t%s", data.getAddress(), escapeString(value)));
+        }
+        return lines;
+    }
+
+    private List<String> collectStringsInRange(Program program, Address start, Address end, int maxResults) {
+        List<String> lines = new ArrayList<>();
+        DataIterator dataIt = program.getListing().getDefinedData(start, true);
+        while (dataIt.hasNext() && lines.size() < maxResults) {
+            Data data = dataIt.next();
+            if (data.getAddress().compareTo(end) > 0) {
+                break;
+            }
+            if (!isStringData(data)) {
+                continue;
+            }
+            String value = data.getValue() != null ? data.getValue().toString() : "";
+            lines.add(String.format("%s\t%s", data.getAddress(), escapeString(value)));
+        }
+        return lines;
+    }
+
+    private String compareStringLists(String mode, List<String> leftLines, List<String> rightLines, int maxDiffs) {
+        Map<String, List<String>> leftByValue = groupStringsByValue(leftLines);
+        Map<String, List<String>> rightByValue = groupStringsByValue(rightLines);
+
+        int shared = 0;
+        for (String value : leftByValue.keySet()) {
+            if (rightByValue.containsKey(value)) {
+                shared++;
+            }
+        }
+
+        List<String> output = new ArrayList<>();
+        output.add("comparison_mode=" + mode);
+        output.add("left_values=" + leftByValue.size());
+        output.add("right_values=" + rightByValue.size());
+        output.add("shared_values=" + shared);
+        output.add("similarity=" + formatSimilarity(shared, leftByValue.size() + rightByValue.size() - shared));
+
+        int emitted = 0;
+        for (Map.Entry<String, List<String>> entry : leftByValue.entrySet()) {
+            if (!rightByValue.containsKey(entry.getKey())) {
+                output.add("left_only_value=" + entry.getKey());
+                emitted++;
+                if (emitted >= maxDiffs) {
+                    break;
+                }
+            }
+        }
+
+        emitted = 0;
+        for (Map.Entry<String, List<String>> entry : rightByValue.entrySet()) {
+            if (!leftByValue.containsKey(entry.getKey())) {
+                output.add("right_only_value=" + entry.getKey());
+                emitted++;
+                if (emitted >= maxDiffs) {
+                    break;
+                }
+            }
+        }
+
+        return String.join("\n", output);
+    }
+
+    private Map<String, List<String>> groupStringsByValue(List<String> lines) {
+        LinkedHashMap<String, List<String>> grouped = new LinkedHashMap<>();
+        for (String line : lines) {
+            String[] parts = line.split("\\t", 2);
+            String value = parts.length == 2 ? parts[1] : line;
+            grouped.computeIfAbsent(value, ignored -> new ArrayList<>()).add(parts[0]);
+        }
+        return grouped;
     }
 
     private String setCommentsBatch(String batch, int commentType, String transactionName) {
