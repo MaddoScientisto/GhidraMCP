@@ -69,6 +69,12 @@ def _response_has_http_404(result: list[str] | str) -> bool:
     return "Error 404" in str(result)
 
 
+def _response_has_context_error(result: list[str] | str) -> bool:
+    if isinstance(result, list):
+        return any("No context found for request" in line for line in result)
+    return "No context found for request" in str(result)
+
+
 def _escape_script_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -240,7 +246,7 @@ def _format_param_summary(payload: dict | str) -> str:
         if value is None or str(value).strip() == "":
             continue
 
-        if key in {"batch", "plan", "script_text", "mappings"}:
+        if key in {"batch", "plan", "script_text", "mappings", "fields", "slots", "methods"}:
             length = len(str(value))
             pieces.append(f"{key}=<{length} chars>")
             continue
@@ -742,6 +748,17 @@ def run_readonly_script(script_path: str = "", script_text: str = "") -> str:
     })
 
 @mcp.tool()
+def run_write_script(script_path: str = "", script_text: str = "", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Run a constrained live write-capable Ghidra script against a writable target program.
+    """
+    return safe_post("run_write_script", _with_target_params({
+        "script_path": script_path,
+        "script_text": script_text,
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
 def set_decompiler_comment(address: str, comment: str) -> str:
     """
     Set a comment for a given address in the function pseudocode.
@@ -892,12 +909,18 @@ def list_project_programs(project_dir: str = "", project_name: str = "", folder_
     """
     List folders and programs available in a Ghidra project.
     """
-    return safe_get("list_project_programs", {
+    params = {
         "project_dir": project_dir,
         "project_name": project_name,
         "folder_path": folder_path,
         "recursive": str(recursive).lower(),
-    })
+    }
+    result = safe_get("list_project_programs", params)
+    if _response_has_http_404(result) or _response_has_context_error(result):
+        alias_result = safe_get("project_programs", params)
+        if not _response_has_http_404(alias_result) and not _response_has_context_error(alias_result):
+            return alias_result
+    return result
 
 @mcp.tool()
 def compare_regions(left_start: str, left_end: str, right_start: str, right_end: str, mode: str = "bytes", max_diffs: int = 100, left_project_dir: str = "", left_project_name: str = "", left_folder_path: str = "", left_program_name: str = "", right_project_dir: str = "", right_project_name: str = "", right_folder_path: str = "", right_program_name: str = "") -> str:
@@ -964,6 +987,196 @@ def port_symbols(mappings: list[dict[str, str]], apply: str = "both", provenance
     params = _with_prefixed_target_params(params, "source_", source_project_dir, source_project_name, source_folder_path, source_program_name)
     params = _with_prefixed_target_params(params, "target_", target_project_dir, target_project_name, target_folder_path, target_program_name)
     return safe_post("port_symbols", params)
+
+@mcp.tool()
+def create_namespace(name: str, parent_path: str = "", kind: str = "namespace", project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Create a namespace or class container.
+    """
+    return safe_post("create_namespace", _with_target_params({
+        "name": name,
+        "parent_path": parent_path,
+        "kind": kind,
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
+def list_namespace_members(path: str, include_child_namespaces: bool = False, include_functions: bool = True, include_data: bool = True, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    List members of a namespace or class container.
+    """
+    return "\n".join(safe_get("list_namespace_members", _with_target_params({
+        "path": path,
+        "include_child_namespaces": str(include_child_namespaces).lower(),
+        "include_functions": str(include_functions).lower(),
+        "include_data": str(include_data).lower(),
+    }, project_dir, project_name, folder_path, program_name)))
+
+@mcp.tool()
+def move_symbol_to_namespace(symbol_address: str = "", symbol_name: str = "", namespace_path: str = "", new_name: str = "", conflict_policy: str = "fail", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Move a function or data symbol under a namespace or class container.
+    """
+    return safe_post("move_symbol_to_namespace", _with_target_params({
+        "symbol_address": symbol_address,
+        "symbol_name": symbol_name,
+        "namespace_path": namespace_path,
+        "new_name": new_name,
+        "conflict_policy": conflict_policy,
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
+def set_function_class(function_address: str, class_path: str, method_name: str = "", this_param_name: str = "this", calling_convention: str = "", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Move a function under a class namespace and optionally apply method metadata.
+    """
+    return safe_post("set_function_class", _with_target_params({
+        "function_address": function_address,
+        "class_path": class_path,
+        "method_name": method_name,
+        "this_param_name": this_param_name,
+        "calling_convention": calling_convention,
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
+
+def _build_struct_field_lines(fields: list[dict[str, str]]) -> tuple[list[str], str | None]:
+    if not isinstance(fields, list):
+        return [], "Error: fields must be a list"
+
+    lines: list[str] = []
+    for index, field in enumerate(fields):
+        if not isinstance(field, dict):
+            return [], f"Error: invalid field at index {index}; expected an object"
+        offset = field.get("offset")
+        name = str(field.get("name", "")).strip()
+        datatype = str(field.get("datatype", "")).strip()
+        comment = str(field.get("comment", "")).strip()
+        confidence = str(field.get("confidence", "")).strip()
+        if offset is None:
+            return [], f"Error: offset is required for field at index {index}"
+        if not name:
+            return [], f"Error: name is required for field at index {index}"
+        if not datatype:
+            return [], f"Error: datatype is required for field at index {index}"
+        lines.append(f"{offset}\t{name}\t{datatype}\t{comment}\t{confidence}")
+    return lines, None
+
+def _build_vtable_slot_lines(slots: list[dict[str, str]]) -> tuple[list[str], str | None]:
+    if not isinstance(slots, list):
+        return [], "Error: slots must be a list"
+
+    lines: list[str] = []
+    for index, slot in enumerate(slots):
+        if not isinstance(slot, dict):
+            return [], f"Error: invalid slot at index {index}; expected an object"
+        offset = slot.get("offset")
+        name = str(slot.get("name", "")).strip()
+        function_address = str(slot.get("function_address", "")).strip()
+        prototype = str(slot.get("prototype", "")).strip()
+        comment = str(slot.get("comment", "")).strip()
+        if offset is None:
+            return [], f"Error: offset is required for slot at index {index}"
+        if not name:
+            return [], f"Error: name is required for slot at index {index}"
+        lines.append(f"{offset}\t{name}\t{function_address}\t{prototype}\t{comment}")
+    return lines, None
+
+def _build_class_method_lines(methods: list[dict[str, str]]) -> tuple[list[str], str | None]:
+    if not isinstance(methods, list):
+        return [], "Error: methods must be a list"
+
+    lines: list[str] = []
+    for index, method in enumerate(methods):
+        if not isinstance(method, dict):
+            return [], f"Error: invalid method at index {index}; expected an object"
+        function_address = str(method.get("function_address", "")).strip()
+        method_name = str(method.get("method_name", "")).strip()
+        slot_offset = "" if method.get("slot_offset") is None else str(method.get("slot_offset"))
+        is_virtual = str(bool(method.get("is_virtual", False))).lower()
+        this_type = str(method.get("this_type", "")).strip()
+        comment = str(method.get("comment", "")).strip()
+        this_storage = str(method.get("this_storage", "")).strip()
+        calling_convention = str(method.get("calling_convention", "")).strip()
+        if not function_address:
+            return [], f"Error: function_address is required for method at index {index}"
+        if not method_name:
+            return [], f"Error: method_name is required for method at index {index}"
+        lines.append(f"{function_address}\t{method_name}\t{slot_offset}\t{is_virtual}\t{this_type}\t{comment}\t{this_storage}\t{calling_convention}")
+    return lines, None
+
+@mcp.tool()
+def create_or_update_struct(name: str, fields: list[dict[str, str]], category_path: str = "", size: int = 0, packing: int = 0, dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Create or update a structure datatype.
+    """
+    lines, error = _build_struct_field_lines(fields)
+    if error:
+        return error
+    return safe_post("create_or_update_struct", _with_target_params({
+        "name": name,
+        "category_path": category_path,
+        "size": size,
+        "packing": packing,
+        "fields": "\n".join(lines),
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
+def create_or_update_vtable(name: str, slots: list[dict[str, str]], category_path: str = "", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Create or update a vtable datatype as a structure of function pointers.
+    """
+    lines, error = _build_vtable_slot_lines(slots)
+    if error:
+        return error
+    return safe_post("create_or_update_vtable", _with_target_params({
+        "name": name,
+        "category_path": category_path,
+        "slots": "\n".join(lines),
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
+def set_function_this_type(function_address: str, this_type: str, this_param_name: str = "this", this_storage: str = "", calling_convention: str = "", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Apply or update this-pointer typing on a function.
+    """
+    return safe_post("set_function_this_type", _with_target_params({
+        "function_address": function_address,
+        "this_type": this_type,
+        "this_param_name": this_param_name,
+        "this_storage": this_storage,
+        "calling_convention": calling_convention,
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
+
+@mcp.tool()
+def analyze_vtable(address: str, slot_count: int = 0, stop_on_invalid_pointer: bool = True, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Inspect a suspected vtable region and emit slot candidates.
+    """
+    return "\n".join(safe_get("analyze_vtable", _with_target_params({
+        "address": address,
+        "slot_count": slot_count,
+        "stop_on_invalid_pointer": str(stop_on_invalid_pointer).lower(),
+    }, project_dir, project_name, folder_path, program_name)))
+
+@mcp.tool()
+def apply_class_layout(class_path: str, instance_struct: str, methods: list[dict[str, str]], vtable_struct: str = "", vtable_address: str = "", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Bind a class namespace, instance struct, optional vtable struct, and a set of methods.
+    """
+    lines, error = _build_class_method_lines(methods)
+    if error:
+        return error
+    return safe_post("apply_class_layout", _with_target_params({
+        "class_path": class_path,
+        "instance_struct": instance_struct,
+        "vtable_struct": vtable_struct,
+        "vtable_address": vtable_address,
+        "methods": "\n".join(lines),
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name))
 
 def main():
     parser = argparse.ArgumentParser(description="MCP server for Ghidra")

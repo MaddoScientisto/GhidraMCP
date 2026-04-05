@@ -44,8 +44,12 @@ import ghidra.util.task.TaskMonitor;
 import ghidra.program.model.pcode.HighVariable;
 import ghidra.program.model.pcode.Varnode;
 import ghidra.program.model.data.DataType;
+import ghidra.program.model.data.DataTypeConflictHandler;
 import ghidra.program.model.data.DataTypeManager;
+import ghidra.program.model.data.FunctionDefinitionDataType;
+import ghidra.program.model.data.CategoryPath;
 import ghidra.program.model.data.PointerDataType;
+import ghidra.program.model.data.StructureDataType;
 import ghidra.program.model.data.Undefined1DataType;
 import ghidra.program.model.listing.Variable;
 import ghidra.app.decompiler.component.DecompilerUtils;
@@ -590,6 +594,159 @@ public class GhidraMCPPlugin extends Plugin {
             sendResponse(exchange, portSymbols(params, mappings, apply, provenanceCommentTemplate, dryRun));
         });
 
+        server.createContext("/create_namespace", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            sendResponse(exchange, createNamespace(
+                params.get("name"),
+                params.get("parent_path"),
+                params.get("kind"),
+                params));
+        });
+
+        server.createContext("/create_class", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            params.put("kind", "class");
+            sendResponse(exchange, createNamespace(
+                params.get("name"),
+                params.get("parent_path"),
+                params.get("kind"),
+                params));
+        });
+
+        server.createContext("/list_namespace_members", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String path = qparams.get("path");
+            boolean includeChildNamespaces = parseBooleanOrDefault(qparams.get("include_child_namespaces"), false);
+            boolean includeFunctions = parseBooleanOrDefault(qparams.get("include_functions"), true);
+            boolean includeData = parseBooleanOrDefault(qparams.get("include_data"), true);
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> listNamespaceMembers(program, path, includeChildNamespaces, includeFunctions, includeData)));
+        });
+
+        server.createContext("/move_symbol_to_namespace", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, moveSymbolToNamespace(
+                params.get("symbol_address"),
+                params.get("symbol_name"),
+                params.get("namespace_path"),
+                params.get("new_name"),
+                params.get("conflict_policy"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/set_function_class", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, setFunctionClass(
+                params.get("function_address"),
+                params.get("class_path"),
+                params.get("method_name"),
+                params.get("this_param_name"),
+                params.get("calling_convention"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/move_function_to_class", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, setFunctionClass(
+                params.get("function_address"),
+                params.get("class_path"),
+                params.get("method_name"),
+                params.get("this_param_name"),
+                params.get("calling_convention"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/create_or_update_struct", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            int size = parseIntOrDefault(params.get("size"), 0);
+            int packing = parseIntOrDefault(params.get("packing"), 0);
+            sendResponse(exchange, createOrUpdateStruct(
+                params.get("name"),
+                params.get("category_path"),
+                size,
+                packing,
+                params.get("fields"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/create_or_update_vtable", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, createOrUpdateVtable(
+                params.get("name"),
+                params.get("category_path"),
+                params.get("slots"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/build_vtable", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, createOrUpdateVtable(
+                params.get("name"),
+                params.get("category_path"),
+                params.get("slots"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/set_function_this_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, setFunctionThisType(
+                params.get("function_address"),
+                params.get("this_type"),
+                params.get("this_param_name"),
+                params.get("this_storage"),
+                params.get("calling_convention"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/set_this_type", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, setFunctionThisType(
+                params.get("function_address"),
+                params.get("this_type"),
+                params.get("this_param_name"),
+                params.get("this_storage"),
+                params.get("calling_convention"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/analyze_vtable", exchange -> {
+            Map<String, String> qparams = parseQueryParams(exchange);
+            String address = qparams.get("address");
+            int slotCount = parseIntOrDefault(qparams.get("slot_count"), 0);
+            boolean stopOnInvalidPointer = parseBooleanOrDefault(qparams.get("stop_on_invalid_pointer"), true);
+            sendResponse(exchange, withReadTargetContext(qparams,
+                program -> analyzeVtable(program, address, slotCount, stopOnInvalidPointer)));
+        });
+
+        server.createContext("/apply_class_layout", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, applyClassLayout(
+                params.get("class_path"),
+                params.get("instance_struct"),
+                params.get("vtable_struct"),
+                params.get("vtable_address"),
+                params.get("methods"),
+                dryRun,
+                params));
+        });
+
         server.createContext("/set_comments", exchange -> {
             Map<String, String> params = parsePostParams(exchange);
             String batch = params.get("batch");
@@ -661,6 +818,22 @@ public class GhidraMCPPlugin extends Plugin {
             String scriptPath = params.get("script_path");
             String scriptText = params.get("script_text");
             sendResponse(exchange, runReadonlyScript(scriptPath, scriptText));
+        });
+
+        server.createContext("/run_write_script", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String scriptPath = params.get("script_path");
+            String scriptText = params.get("script_text");
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, runWriteScript(scriptPath, scriptText, dryRun, params));
+        });
+
+        server.createContext("/run_transaction_script", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            String scriptPath = params.get("script_path");
+            String scriptText = params.get("script_text");
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, runWriteScript(scriptPath, scriptText, dryRun, params));
         });
 
         server.setExecutor(null);
@@ -1396,6 +1569,34 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    private static class NamespaceResolutionResult {
+        private final Namespace namespace;
+        private final String errorMessage;
+
+        private NamespaceResolutionResult(Namespace namespace, String errorMessage) {
+            this.namespace = namespace;
+            this.errorMessage = errorMessage;
+        }
+
+        private boolean hasError() {
+            return errorMessage != null && !errorMessage.isBlank();
+        }
+    }
+
+    private static class SymbolLookupResult {
+        private final Symbol symbol;
+        private final String errorMessage;
+
+        private SymbolLookupResult(Symbol symbol, String errorMessage) {
+            this.symbol = symbol;
+            this.errorMessage = errorMessage;
+        }
+
+        private boolean hasError() {
+            return errorMessage != null && !errorMessage.isBlank();
+        }
+    }
+
     private static class ReadonlyScriptCapability {
         private final boolean supported;
         private final String status;
@@ -1403,6 +1604,20 @@ public class GhidraMCPPlugin extends Plugin {
         private final String detail;
 
         private ReadonlyScriptCapability(boolean supported, String status, String reason, String detail) {
+            this.supported = supported;
+            this.status = status;
+            this.reason = reason;
+            this.detail = detail;
+        }
+    }
+
+    private static class WriteScriptCapability {
+        private final boolean supported;
+        private final String status;
+        private final String reason;
+        private final String detail;
+
+        private WriteScriptCapability(boolean supported, String status, String reason, String detail) {
             this.supported = supported;
             this.status = status;
             this.reason = reason;
@@ -1807,6 +2022,1173 @@ public class GhidraMCPPlugin extends Plugin {
         } finally {
             closeWriteTargetContext(leftContext);
             closeWriteTargetContext(rightContext);
+        }
+    }
+
+    private String createNamespace(String name, String parentPath, String kind, Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "create_namespace failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Create namespace");
+                boolean commit = false;
+                try {
+                    OperationResult result = createNamespaceInProgram(context.program, name, parentPath, kind);
+                    resultRef.set(result);
+                    commit = result.success;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to create namespace on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult createNamespaceInProgram(Program program, String name, String parentPath, String kind) {
+        String normalizedName = trimToNull(name);
+        if (normalizedName == null) {
+            return new OperationResult(false, "name is required");
+        }
+
+        String normalizedKind = trimToNull(kind);
+        if (normalizedKind == null) {
+            normalizedKind = "namespace";
+        }
+        normalizedKind = normalizedKind.toLowerCase(Locale.ROOT);
+        if (!normalizedKind.equals("namespace") && !normalizedKind.equals("class")) {
+            return new OperationResult(false, "kind must be namespace or class");
+        }
+
+        NamespaceResolutionResult parentResult = resolveNamespacePath(program, parentPath, false, false);
+        if (parentResult.hasError()) {
+            return new OperationResult(false, parentResult.errorMessage);
+        }
+
+        Namespace parentNamespace = parentResult.namespace == null ? program.getGlobalNamespace() : parentResult.namespace;
+        SymbolTable symbolTable = program.getSymbolTable();
+        Namespace existing = findChildNamespace(symbolTable, parentNamespace, normalizedName);
+        if (existing != null) {
+            return new OperationResult(true,
+                "status=exists\ncreated=false\nkind=" + namespaceKind(existing) + "\npath=" + namespacePath(existing));
+        }
+
+        try {
+            Namespace created = normalizedKind.equals("class")
+                ? symbolTable.createClass(parentNamespace, normalizedName, SourceType.USER_DEFINED)
+                : symbolTable.createNameSpace(parentNamespace, normalizedName, SourceType.USER_DEFINED);
+            return new OperationResult(true,
+                "status=ok\ncreated=true\nkind=" + normalizedKind + "\npath=" + namespacePath(created)
+                    + "\nsymbol_id=" + created.getSymbol().getID());
+        } catch (DuplicateNameException | InvalidInputException e) {
+            return new OperationResult(false, "Failed to create namespace: " + e.getMessage());
+        }
+    }
+
+    private String listNamespaceMembers(Program program, String path, boolean includeChildNamespaces,
+                                        boolean includeFunctions, boolean includeData) {
+        NamespaceResolutionResult namespaceResult = resolveNamespacePath(program, path, false, false);
+        if (namespaceResult.hasError()) {
+            return namespaceResult.errorMessage;
+        }
+
+        Namespace namespace = namespaceResult.namespace;
+        if (namespace == null) {
+            return "path is required";
+        }
+
+        List<String> lines = new ArrayList<>();
+        SymbolIterator iterator = program.getSymbolTable().getSymbols(namespace);
+        while (iterator.hasNext()) {
+            Symbol symbol = iterator.next();
+            if (symbol == null || symbol.isDeleted()) {
+                continue;
+            }
+
+            SymbolType symbolType = symbol.getSymbolType();
+            boolean isNamespace = symbolType == SymbolType.NAMESPACE || symbolType == SymbolType.CLASS;
+            if (isNamespace && !includeChildNamespaces) {
+                continue;
+            }
+            if (symbolType == SymbolType.FUNCTION && !includeFunctions) {
+                continue;
+            }
+            if (!isNamespace && symbolType != SymbolType.FUNCTION && !includeData) {
+                continue;
+            }
+
+            String datatype = "";
+            if (symbol.getAddress() != null) {
+                Data data = program.getListing().getDefinedDataAt(symbol.getAddress());
+                if (data != null && data.getDataType() != null) {
+                    datatype = data.getDataType().getPathName();
+                }
+            }
+
+            lines.add("member_kind=" + symbolType
+                + "\tname=" + safeValueForResponse(symbol.getName())
+                + "\taddress=" + safeValueForResponse(symbol.getAddress() == null ? "" : symbol.getAddress().toString())
+                + "\tdatatype=" + safeValueForResponse(datatype)
+                + "\tpath=" + safeValueForResponse(symbolPath(symbol)));
+        }
+
+        return "status=ok\npath=" + namespacePath(namespace)
+            + "\nmember_count=" + lines.size()
+            + (lines.isEmpty() ? "" : "\n" + String.join("\n", lines));
+    }
+
+    private String moveSymbolToNamespace(String symbolAddress, String symbolName, String namespacePath,
+                                         String newName, String conflictPolicy, boolean dryRun,
+                                         Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "move_symbol_to_namespace failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Move symbol to namespace");
+                boolean commit = false;
+                try {
+                    OperationResult result = moveSymbolToNamespaceInProgram(
+                        context.program, symbolAddress, symbolName, namespacePath, newName, conflictPolicy, dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to move symbol on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult moveSymbolToNamespaceInProgram(Program program, String symbolAddress,
+                                                           String symbolName, String namespacePath,
+                                                           String newName, String conflictPolicy,
+                                                           boolean dryRun) {
+        SymbolLookupResult symbolResult = resolveMovableSymbol(program, symbolAddress, symbolName);
+        if (symbolResult.hasError()) {
+            return new OperationResult(false, symbolResult.errorMessage);
+        }
+
+        NamespaceResolutionResult namespaceResult = resolveNamespacePath(program, namespacePath, true, true);
+        if (namespaceResult.hasError()) {
+            return new OperationResult(false, namespaceResult.errorMessage);
+        }
+
+        Symbol symbol = symbolResult.symbol;
+        Namespace targetNamespace = namespaceResult.namespace;
+        String policy = trimToNull(conflictPolicy);
+        if (policy == null) {
+            policy = "fail";
+        }
+        policy = policy.toLowerCase(Locale.ROOT);
+        if (!policy.equals("fail") && !policy.equals("keep_existing") && !policy.equals("rename_incoming")) {
+            return new OperationResult(false, "conflict_policy must be fail, keep_existing, or rename_incoming");
+        }
+
+        String oldPath = symbolPath(symbol);
+        String requestedName = trimToNull(newName);
+        String targetName = requestedName == null ? symbol.getName() : requestedName;
+        Symbol collision = findChildSymbol(program, targetNamespace, targetName);
+        if (collision != null && collision.getID() != symbol.getID()) {
+            if (policy.equals("keep_existing")) {
+                return new OperationResult(true,
+                    "status=skipped\nmoved=false\nold_path=" + oldPath
+                        + "\nnew_path=" + symbolPath(collision)
+                        + "\ncollision=" + safeValueForResponse(symbolPath(collision)));
+            }
+            if (policy.equals("fail")) {
+                return new OperationResult(false,
+                    "status=collision\nmoved=false\nold_path=" + oldPath
+                        + "\nrequested_path=" + namespacePath(targetNamespace) + Namespace.DELIMITER + targetName
+                        + "\ncollision=" + safeValueForResponse(symbolPath(collision)));
+            }
+            targetName = makeUniqueChildName(program, targetNamespace, targetName);
+        }
+
+        String newPath = namespacePath(targetNamespace) + Namespace.DELIMITER + targetName;
+        if (dryRun) {
+            return new OperationResult(true,
+                "status=dry_run\nmoved=false\nold_path=" + oldPath + "\nnew_path=" + newPath);
+        }
+
+        try {
+            symbol.setNameAndNamespace(targetName, targetNamespace, SourceType.USER_DEFINED);
+            return new OperationResult(true,
+                "status=ok\nmoved=true\nold_path=" + oldPath + "\nnew_path=" + symbolPath(symbol));
+        } catch (DuplicateNameException | InvalidInputException | CircularDependencyException e) {
+            return new OperationResult(false, "Failed to move symbol: " + e.getMessage());
+        }
+    }
+
+    private String setFunctionClass(String functionAddress, String classPath, String methodName,
+                                    String thisParamName, String callingConvention, boolean dryRun,
+                                    Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "set_function_class failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Set function class");
+                boolean commit = false;
+                try {
+                    OperationResult result = setFunctionClassInProgram(
+                        context.program, functionAddress, classPath, methodName, thisParamName, callingConvention, dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to set function class on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult setFunctionClassInProgram(Program program, String functionAddress,
+                                                      String classPath, String methodName,
+                                                      String thisParamName, String callingConvention,
+                                                      boolean dryRun) {
+        Address addr = parseAddress(program, functionAddress);
+        Function function = getFunctionForAddress(program, addr);
+        if (function == null) {
+            return new OperationResult(false, "function_address did not resolve to a function");
+        }
+
+        String before = function.getPrototypeString(true, true);
+        OperationResult moveResult = moveSymbolToNamespaceInProgram(
+            program,
+            functionAddress,
+            "",
+            classPath,
+            trimToNull(methodName),
+            "rename_incoming",
+            dryRun);
+        if (!moveResult.success) {
+            return moveResult;
+        }
+
+        List<String> lines = new ArrayList<>();
+        lines.add(moveResult.message);
+
+        String normalizedCallingConvention = trimToNull(callingConvention);
+        if (normalizedCallingConvention != null) {
+            if (dryRun) {
+                lines.add("calling_convention_after=" + normalizeWhitespace(normalizedCallingConvention));
+            } else {
+                try {
+                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, true));
+                } catch (InvalidInputException firstError) {
+                    try {
+                        function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, false));
+                    } catch (InvalidInputException secondError) {
+                        return new OperationResult(false, "Failed to set calling convention: " + secondError.getMessage());
+                    }
+                }
+            }
+        }
+
+        lines.add("function_address=" + function.getEntryPoint());
+        lines.add("signature_before=" + before);
+        lines.add("signature_after=" + function.getPrototypeString(true, true));
+        if (trimToNull(thisParamName) != null) {
+            lines.add("this_param_name=" + trimToNull(thisParamName));
+        }
+        return new OperationResult(true, String.join("\n", lines));
+    }
+
+    private String setFunctionThisType(String functionAddress, String thisType,
+                                       String thisParamName, String thisStorage,
+                                       String callingConvention, boolean dryRun,
+                                       Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "set_function_this_type failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Set function this type");
+                boolean commit = false;
+                try {
+                    OperationResult result = setFunctionThisTypeInProgram(
+                        context.program, functionAddress, thisType, thisParamName, thisStorage, callingConvention, dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to set this type on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult setFunctionThisTypeInProgram(Program program, String functionAddress,
+                                                         String thisType, String thisParamName,
+                                                         String thisStorage, String callingConvention,
+                                                         boolean dryRun) {
+        Address addr = parseAddress(program, functionAddress);
+        Function function = getFunctionForAddress(program, addr);
+        if (function == null) {
+            return new OperationResult(false, "function_address did not resolve to a function");
+        }
+
+        String normalizedThisType = trimToNull(thisType);
+        if (normalizedThisType == null) {
+            return new OperationResult(false, "this_type is required");
+        }
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType resolvedThisType = resolveDataType(dtm, normalizedThisType);
+        if (resolvedThisType == null) {
+            return new OperationResult(false, "Unable to resolve this_type: " + normalizedThisType);
+        }
+
+        String requestedParamName = trimToNull(thisParamName);
+        if (requestedParamName == null) {
+            requestedParamName = Function.THIS_PARAM_NAME;
+        }
+
+        String before = function.getPrototypeString(true, true);
+        String storageHint = trimToNull(thisStorage);
+        String normalizedStorageHint = storageHint == null ? "" : storageHint.toLowerCase(Locale.ROOT);
+        boolean preserveExistingStorage = normalizedStorageHint.isBlank()
+            || normalizedStorageHint.equals("preserve")
+            || normalizedStorageHint.equals("existing")
+            || normalizedStorageHint.equals("current");
+        if (dryRun) {
+            return new OperationResult(true,
+                "status=dry_run\nfunction_address=" + function.getEntryPoint()
+                    + "\nthis_type=" + resolvedThisType.getPathName()
+                    + "\nthis_param_name=" + requestedParamName
+                    + "\nthis_storage=" + safeValueForResponse(storageHint)
+                    + "\nstorage_strategy=" + (preserveExistingStorage ? "custom_then_dynamic_fallback" : "dynamic_storage_override")
+                    + "\nsignature_before=" + before
+                    + "\nsignature_after=<pending update>");
+        }
+
+        try {
+            Parameter[] parameters = function.getParameters();
+            String storageStrategy = parameters.length == 0
+                ? "dynamic_storage_new_parameter"
+                : (preserveExistingStorage ? "preserved_custom_storage" : "dynamic_storage_override");
+            List<String> warnings = new ArrayList<>();
+            boolean applied = false;
+
+            if (parameters.length > 0 && preserveExistingStorage) {
+                List<Variable> customReplacements = new ArrayList<>();
+                Parameter first = parameters[0];
+                customReplacements.add(new ParameterImpl(
+                    requestedParamName,
+                    resolvedThisType,
+                    first.getVariableStorage(),
+                    program,
+                    SourceType.USER_DEFINED));
+                for (int index = 1; index < parameters.length; index++) {
+                    customReplacements.add(new ParameterImpl(parameters[index], program));
+                }
+                try {
+                    function.replaceParameters(customReplacements,
+                        Function.FunctionUpdateType.CUSTOM_STORAGE,
+                        true,
+                        SourceType.USER_DEFINED);
+                    applied = true;
+                } catch (InvalidInputException customStorageError) {
+                    storageStrategy = "dynamic_storage_fallback";
+                    warnings.add("warning=this_storage_fallback\treason="
+                        + safeValueForResponse(normalizeWhitespace(customStorageError.getMessage())));
+                }
+            }
+
+            if (!applied) {
+                List<Variable> replacements = new ArrayList<>();
+                replacements.add(new ParameterImpl(
+                    requestedParamName,
+                    resolvedThisType,
+                    program,
+                    SourceType.USER_DEFINED));
+                for (int index = 1; index < parameters.length; index++) {
+                    replacements.add(new ParameterImpl(parameters[index], program));
+                }
+                function.replaceParameters(replacements,
+                    Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS,
+                    true,
+                    SourceType.USER_DEFINED);
+            }
+
+            String normalizedCallingConvention = trimToNull(callingConvention);
+            if (normalizedCallingConvention != null) {
+                try {
+                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, true));
+                } catch (InvalidInputException firstError) {
+                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, false));
+                }
+            }
+
+            return new OperationResult(true,
+                "status=ok\nfunction_address=" + function.getEntryPoint()
+                    + "\nthis_type=" + resolvedThisType.getPathName()
+                    + "\nthis_param_name=" + requestedParamName
+                    + "\nthis_storage=" + safeValueForResponse(storageHint)
+                    + "\nstorage_strategy=" + storageStrategy
+                    + "\nsignature_before=" + before
+                    + "\nsignature_after=" + function.getPrototypeString(true, true)
+                    + (warnings.isEmpty() ? "" : "\n" + String.join("\n", warnings)));
+        } catch (DuplicateNameException | InvalidInputException e) {
+            return new OperationResult(false, "Failed to apply this type: " + e.getMessage());
+        }
+    }
+
+    private String createOrUpdateStruct(String name, String categoryPath, int size, int packing,
+                                        String fields, boolean dryRun, Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "create_or_update_struct failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Create or update struct");
+                boolean commit = false;
+                try {
+                    OperationResult result = createOrUpdateStructInProgram(context.program, name, categoryPath, size, packing, fields, dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to create/update struct on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult createOrUpdateStructInProgram(Program program, String name,
+                                                          String categoryPath, int size, int packing,
+                                                          String fields, boolean dryRun) {
+        String normalizedName = trimToNull(name);
+        if (normalizedName == null) {
+            return new OperationResult(false, "name is required");
+        }
+        if (fields == null || fields.isBlank()) {
+            return new OperationResult(false, "fields is required");
+        }
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        CategoryPath normalizedCategoryPath = normalizeCategoryPath(categoryPath);
+        StructureDataType structure = new StructureDataType(normalizedCategoryPath, normalizedName, Math.max(size, 0), dtm);
+        List<String> fieldLines = new ArrayList<>();
+        int fieldCount = 0;
+        int requiredLength = Math.max(size, 0);
+
+        for (String rawLine : fields.split("\\r?\\n")) {
+            if (rawLine.isBlank()) {
+                continue;
+            }
+            String[] parts = rawLine.split("\\t", -1);
+            if (parts.length < 3) {
+                return new OperationResult(false, "Invalid field line: " + rawLine);
+            }
+
+            int offset = parseIntOrDefault(parts[0].trim(), -1);
+            if (offset < 0) {
+                return new OperationResult(false, "Invalid field offset: " + parts[0]);
+            }
+            String fieldName = trimToNull(parts[1]);
+            String datatypeName = trimToNull(parts[2]);
+            if (fieldName == null || datatypeName == null) {
+                return new OperationResult(false, "Field name and datatype are required: " + rawLine);
+            }
+
+            DataType fieldType = resolveDataType(dtm, datatypeName);
+            if (fieldType == null) {
+                return new OperationResult(false, "Unable to resolve field datatype: " + datatypeName);
+            }
+
+            String comment = parts.length >= 4 ? trimToNull(parts[3]) : null;
+            String confidence = parts.length >= 5 ? trimToNull(parts[4]) : null;
+            if (confidence != null) {
+                comment = comment == null ? "confidence=" + confidence : comment + " | confidence=" + confidence;
+            }
+
+            int componentLength = Math.max(fieldType.getLength(), 1);
+            int endOffset = offset + componentLength;
+            if (endOffset > requiredLength) {
+                requiredLength = endOffset;
+            }
+            if (endOffset > structure.getLength()) {
+                structure.growStructure(endOffset - structure.getLength());
+            }
+            structure.replaceAtOffset(offset, fieldType, componentLength, fieldName, comment);
+            fieldLines.add("field_offset=" + offset + "\tname=" + fieldName + "\tdatatype=" + fieldType.getPathName());
+            fieldCount++;
+        }
+
+        if (requiredLength > structure.getLength()) {
+            structure.setLength(requiredLength);
+        }
+
+        String datatypePath = normalizedCategoryPath.getPath() + "/" + normalizedName;
+        if (dryRun) {
+            return new OperationResult(true,
+                "status=dry_run\ndatatype_path=" + datatypePath
+                    + "\ncreated_or_updated=false\nsize=" + structure.getLength()
+                    + "\nfield_count=" + fieldCount
+                    + (packing > 0 ? "\npacking_ignored=" + packing : "")
+                    + (fieldLines.isEmpty() ? "" : "\n" + String.join("\n", fieldLines)));
+        }
+
+        dtm.createCategory(normalizedCategoryPath);
+        DataType resolved = dtm.addDataType(structure, DataTypeConflictHandler.REPLACE_HANDLER);
+        return new OperationResult(true,
+            "status=ok\ndatatype_path=" + resolved.getPathName()
+                + "\ncreated_or_updated=true\nsize=" + structure.getLength()
+                + "\nfield_count=" + fieldCount
+                + (packing > 0 ? "\npacking_ignored=" + packing : "")
+                + (fieldLines.isEmpty() ? "" : "\n" + String.join("\n", fieldLines)));
+    }
+
+    private String createOrUpdateVtable(String name, String categoryPath, String slots,
+                                        boolean dryRun, Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "create_or_update_vtable failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Create or update vtable");
+                boolean commit = false;
+                try {
+                    OperationResult result = createOrUpdateVtableInProgram(context.program, name, categoryPath, slots, dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to create/update vtable on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult createOrUpdateVtableInProgram(Program program, String name,
+                                                          String categoryPath, String slots,
+                                                          boolean dryRun) {
+        String normalizedName = trimToNull(name);
+        if (normalizedName == null) {
+            return new OperationResult(false, "name is required");
+        }
+        if (slots == null || slots.isBlank()) {
+            return new OperationResult(false, "slots is required");
+        }
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        CategoryPath normalizedCategoryPath = normalizeCategoryPath(categoryPath);
+        StructureDataType vtable = new StructureDataType(normalizedCategoryPath, normalizedName, 0, dtm);
+        List<String> boundFunctions = new ArrayList<>();
+        int pointerSize = Math.max(program.getDefaultPointerSize(), 1);
+        int requiredLength = 0;
+        int slotCount = 0;
+
+        for (String rawLine : slots.split("\\r?\\n")) {
+            if (rawLine.isBlank()) {
+                continue;
+            }
+            String[] parts = rawLine.split("\\t", -1);
+            if (parts.length < 2) {
+                return new OperationResult(false, "Invalid slot line: " + rawLine);
+            }
+
+            int offset = parseIntOrDefault(parts[0].trim(), -1);
+            if (offset < 0) {
+                return new OperationResult(false, "Invalid slot offset: " + parts[0]);
+            }
+
+            String slotName = trimToNull(parts[1]);
+            if (slotName == null) {
+                slotName = String.format(Locale.ROOT, "slot_%04x", offset);
+            }
+            String functionAddress = parts.length >= 3 ? trimToNull(parts[2]) : null;
+            String prototype = parts.length >= 4 ? trimToNull(parts[3]) : null;
+            String comment = parts.length >= 5 ? trimToNull(parts[4]) : null;
+
+            DataType slotType = buildVtableSlotPointerType(program, normalizedCategoryPath, slotName, functionAddress, prototype);
+            if (slotType == null) {
+                slotType = dtm.getPointer(new Undefined1DataType());
+            }
+
+            int componentLength = Math.max(pointerSize, Math.max(slotType.getLength(), 1));
+            int endOffset = offset + componentLength;
+            if (endOffset > requiredLength) {
+                requiredLength = endOffset;
+            }
+            if (endOffset > vtable.getLength()) {
+                vtable.growStructure(endOffset - vtable.getLength());
+            }
+            vtable.replaceAtOffset(offset, slotType, componentLength, slotName, comment);
+
+            String boundFunctionName = "";
+            if (functionAddress != null) {
+                Function function = resolveFunctionIdentifier(program, functionAddress);
+                if (function != null) {
+                    boundFunctionName = function.getName();
+                }
+            }
+            boundFunctions.add("offset=" + offset
+                + "\tfunction_address=" + safeValueForResponse(functionAddress)
+                + "\tname=" + safeValueForResponse(boundFunctionName));
+            slotCount++;
+        }
+
+        if (requiredLength > vtable.getLength()) {
+            vtable.setLength(requiredLength);
+        }
+
+        String datatypePath = normalizedCategoryPath.getPath() + "/" + normalizedName;
+        if (dryRun) {
+            return new OperationResult(true,
+                "status=dry_run\ndatatype_path=" + datatypePath
+                    + "\nslot_count=" + slotCount
+                    + (boundFunctions.isEmpty() ? "" : "\n" + String.join("\n", boundFunctions)));
+        }
+
+        dtm.createCategory(normalizedCategoryPath);
+        DataType resolved = dtm.addDataType(vtable, DataTypeConflictHandler.REPLACE_HANDLER);
+        return new OperationResult(true,
+            "status=ok\ndatatype_path=" + resolved.getPathName()
+                + "\nslot_count=" + slotCount
+                + (boundFunctions.isEmpty() ? "" : "\n" + String.join("\n", boundFunctions)));
+    }
+
+    private String analyzeVtable(Program program, String address, int slotCount, boolean stopOnInvalidPointer) {
+        Address start = parseAddress(program, address);
+        if (start == null) {
+            return "address is required";
+        }
+
+        int resolvedSlotCount = slotCount > 0 ? slotCount : 16;
+        int pointerSize = Math.max(program.getDefaultPointerSize(), 1);
+        List<String> lines = new ArrayList<>();
+        List<String> warnings = new ArrayList<>();
+
+        for (int index = 0; index < resolvedSlotCount; index++) {
+            int offset = index * pointerSize;
+            Address entryAddress = start.add(offset);
+            Address targetAddress = resolveVtableEntryTarget(program, entryAddress, pointerSize);
+            if (targetAddress == null) {
+                warnings.add("warning=invalid_pointer\tentry_address=" + entryAddress + "\toffset=" + offset);
+                if (stopOnInvalidPointer) {
+                    break;
+                }
+                continue;
+            }
+
+            Function function = getFunctionForAddress(program, targetAddress);
+            Symbol symbol = program.getSymbolTable().getPrimarySymbol(targetAddress);
+            String targetName = symbol != null ? symbol.getName() : safeFunctionName(function);
+            String owner = "";
+            if (function != null) {
+                owner = namespacePath(function.getParentNamespace());
+            } else if (symbol != null && symbol.getParentNamespace() != null) {
+                owner = namespacePath(symbol.getParentNamespace());
+            }
+
+            lines.add("slot_offset=" + offset
+                + "\tentry_address=" + entryAddress
+                + "\ttarget_address=" + targetAddress
+                + "\ttarget_name=" + safeValueForResponse(targetName)
+                + "\tis_function=" + (function != null)
+                + "\tcurrent_owner=" + safeValueForResponse(owner));
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("status=ok\naddress=").append(start)
+            .append("\nslot_count=").append(lines.size())
+            .append("\npointer_size=").append(pointerSize);
+        if (!lines.isEmpty()) {
+            out.append("\n").append(String.join("\n", lines));
+        }
+        if (!warnings.isEmpty()) {
+            out.append("\n").append(String.join("\n", warnings));
+        }
+        return out.toString();
+    }
+
+    private String applyClassLayout(String classPath, String instanceStruct, String vtableStruct,
+                                    String vtableAddress, String methods, boolean dryRun,
+                                    Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(new OperationResult(false, "apply_class_layout failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Apply class layout");
+                boolean commit = false;
+                try {
+                    OperationResult result = applyClassLayoutInProgram(
+                        context.program, classPath, instanceStruct, vtableStruct, vtableAddress, methods, dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false, "Failed to apply class layout on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult applyClassLayoutInProgram(Program program, String classPath,
+                                                      String instanceStruct, String vtableStruct,
+                                                      String vtableAddress, String methods,
+                                                      boolean dryRun) {
+        String normalizedClassPath = trimToNull(classPath);
+        String normalizedInstanceStruct = trimToNull(instanceStruct);
+        if (normalizedClassPath == null) {
+            return new OperationResult(false, "class_path is required");
+        }
+        if (normalizedInstanceStruct == null) {
+            return new OperationResult(false, "instance_struct is required");
+        }
+        if (methods == null || methods.isBlank()) {
+            return new OperationResult(false, "methods is required");
+        }
+
+        DataType instanceType = resolveDataType(program.getDataTypeManager(), normalizedInstanceStruct);
+        if (instanceType == null) {
+            return new OperationResult(false, "Unable to resolve instance_struct: " + normalizedInstanceStruct);
+        }
+
+        DataType resolvedVtableType = null;
+        String normalizedVtableStruct = trimToNull(vtableStruct);
+        if (normalizedVtableStruct != null) {
+            resolvedVtableType = resolveDataType(program.getDataTypeManager(), normalizedVtableStruct);
+            if (resolvedVtableType == null) {
+                return new OperationResult(false, "Unable to resolve vtable_struct: " + normalizedVtableStruct);
+            }
+        }
+
+        NamespaceResolutionResult classNamespaceResult = resolveNamespacePath(program, normalizedClassPath, true, true);
+        if (classNamespaceResult.hasError()) {
+            return new OperationResult(false, classNamespaceResult.errorMessage);
+        }
+
+        List<String> warnings = new ArrayList<>();
+        List<String> applied = new ArrayList<>();
+        int appliedMethods = 0;
+        int typedMethods = 0;
+        int typingFailures = 0;
+        String defaultThisType = instanceType.getPathName().endsWith("*")
+            ? instanceType.getPathName()
+            : instanceType.getPathName() + " *";
+
+        for (String rawLine : methods.split("\\r?\\n")) {
+            if (rawLine.isBlank()) {
+                continue;
+            }
+            String[] parts = rawLine.split("\\t", -1);
+            if (parts.length < 2) {
+                return new OperationResult(false, "Invalid method line: " + rawLine);
+            }
+
+            String functionAddress = trimToNull(parts[0]);
+            String methodName = trimToNull(parts[1]);
+            String slotOffset = parts.length >= 3 ? trimToNull(parts[2]) : null;
+            boolean isVirtual = parts.length >= 4 && parseBooleanOrDefault(parts[3], false);
+            String methodThisType = parts.length >= 5 ? trimToNull(parts[4]) : null;
+            String comment = parts.length >= 6 ? trimToNull(parts[5]) : null;
+            String methodThisStorage = parts.length >= 7 ? trimToNull(parts[6]) : null;
+            String methodCallingConvention = parts.length >= 8 ? trimToNull(parts[7]) : null;
+
+            OperationResult moveResult = moveSymbolToNamespaceInProgram(
+                program, functionAddress, "", normalizedClassPath, methodName, "rename_incoming", dryRun);
+            if (!moveResult.success) {
+                return moveResult;
+            }
+
+            OperationResult thisTypeResult = setFunctionThisTypeInProgram(
+                program,
+                functionAddress,
+                methodThisType == null ? defaultThisType : methodThisType,
+                Function.THIS_PARAM_NAME,
+                methodThisStorage == null ? "farptr" : methodThisStorage,
+                methodCallingConvention == null ? "" : methodCallingConvention,
+                dryRun);
+
+            Address addr = parseAddress(program, functionAddress);
+            Function function = getFunctionForAddress(program, addr);
+            if (function != null && comment != null && !dryRun) {
+                function.setComment(comment);
+            }
+            boolean typingApplied = thisTypeResult.success;
+            if (!typingApplied) {
+                typingFailures++;
+                warnings.add("warning=this_type_apply_failed\tfunction_address="
+                    + safeValueForResponse(functionAddress)
+                    + "\treason=" + safeValueForResponse(normalizeWhitespace(thisTypeResult.message)));
+            } else {
+                typedMethods++;
+            }
+            if (isVirtual && slotOffset == null) {
+                warnings.add("warning=virtual_method_missing_slot\tfunction_address=" + safeValueForResponse(functionAddress));
+            }
+            if (isVirtual && normalizedVtableStruct == null) {
+                warnings.add("warning=virtual_method_without_vtable_struct\tfunction_address=" + safeValueForResponse(functionAddress));
+            }
+
+            applied.add("function_address=" + safeValueForResponse(functionAddress)
+                + "\tmethod_name=" + safeValueForResponse(methodName)
+                + "\tis_virtual=" + isVirtual
+                + "\tthis_type_applied=" + typingApplied
+                + "\tslot_offset=" + safeValueForResponse(slotOffset));
+            appliedMethods++;
+        }
+
+        if (trimToNull(vtableAddress) != null && normalizedVtableStruct != null) {
+            warnings.add("warning=vtable_binding_not_materialized\tvtable_address=" + trimToNull(vtableAddress)
+                + "\tvtable_struct=" + normalizedVtableStruct);
+        }
+
+        StringBuilder out = new StringBuilder();
+        out.append("status=").append(dryRun ? "dry_run" : "ok")
+            .append("\nclass_path=").append(namespacePath(classNamespaceResult.namespace))
+            .append("\ninstance_struct=").append(instanceType.getPathName())
+            .append("\napplied_methods=").append(appliedMethods)
+            .append("\ntyped_methods=").append(typedMethods)
+            .append("\ntyping_failures=").append(typingFailures)
+            .append("\napplied_structs=").append(1 + (resolvedVtableType != null ? 1 : 0));
+        if (resolvedVtableType != null) {
+            out.append("\nvtable_struct=").append(resolvedVtableType.getPathName());
+        }
+        if (!applied.isEmpty()) {
+            out.append("\n").append(String.join("\n", applied));
+        }
+        if (!warnings.isEmpty()) {
+            out.append("\n").append(String.join("\n", warnings));
+        }
+        return new OperationResult(true, out.toString());
+    }
+
+    private NamespaceResolutionResult resolveNamespacePath(Program program, String path,
+                                                           boolean createMissing, boolean leafIsClass) {
+        Namespace current = program.getGlobalNamespace();
+        String normalizedPath = trimToNull(path);
+        if (normalizedPath == null) {
+            return new NamespaceResolutionResult(current, null);
+        }
+
+        String[] parts = splitNamespacePath(normalizedPath);
+        SymbolTable symbolTable = program.getSymbolTable();
+        for (int index = 0; index < parts.length; index++) {
+            String part = trimToNull(parts[index]);
+            if (part == null) {
+                continue;
+            }
+            boolean isLeaf = index == parts.length - 1;
+            Namespace next = findChildNamespace(symbolTable, current, part);
+            if (next == null && createMissing) {
+                try {
+                    next = isLeaf && leafIsClass
+                        ? symbolTable.createClass(current, part, SourceType.USER_DEFINED)
+                        : symbolTable.createNameSpace(current, part, SourceType.USER_DEFINED);
+                } catch (DuplicateNameException | InvalidInputException e) {
+                    return new NamespaceResolutionResult(null, "Failed to create namespace path: " + e.getMessage());
+                }
+            }
+            if (next == null) {
+                return new NamespaceResolutionResult(null,
+                    "Namespace not found: " + normalizedPath);
+            }
+            current = next;
+        }
+        return new NamespaceResolutionResult(current, null);
+    }
+
+    private Namespace findChildNamespace(SymbolTable symbolTable, Namespace parent, String name) {
+        Namespace namespace = symbolTable.getNamespace(name, parent);
+        if (namespace != null) {
+            return namespace;
+        }
+        Symbol classSymbol = symbolTable.getClassSymbol(name, parent);
+        if (classSymbol != null && classSymbol.getObject() instanceof Namespace) {
+            return (Namespace) classSymbol.getObject();
+        }
+        return null;
+    }
+
+    private SymbolLookupResult resolveMovableSymbol(Program program, String symbolAddress, String symbolName) {
+        Address addr = parseAddress(program, symbolAddress);
+        if (addr != null) {
+            Function function = getFunctionForAddress(program, addr);
+            if (function != null) {
+                return new SymbolLookupResult(function.getSymbol(), null);
+            }
+            Symbol symbol = program.getSymbolTable().getPrimarySymbol(addr);
+            if (symbol != null) {
+                return new SymbolLookupResult(symbol, null);
+            }
+            return new SymbolLookupResult(null, "No symbol found at symbol_address");
+        }
+
+        String normalizedName = trimToNull(symbolName);
+        if (normalizedName == null) {
+            return new SymbolLookupResult(null, "symbol_address or symbol_name is required");
+        }
+
+        SymbolIterator iterator = program.getSymbolTable().scanSymbolsByName(normalizedName);
+        Symbol match = null;
+        while (iterator.hasNext()) {
+            Symbol symbol = iterator.next();
+            if (symbol == null || symbol.isDynamic()) {
+                continue;
+            }
+            if (match != null && match.getID() != symbol.getID()) {
+                return new SymbolLookupResult(null, "symbol_name is ambiguous; use symbol_address instead");
+            }
+            match = symbol;
+        }
+
+        if (match == null) {
+            return new SymbolLookupResult(null, "No symbol found for symbol_name");
+        }
+        return new SymbolLookupResult(match, null);
+    }
+
+    private Symbol findChildSymbol(Program program, Namespace namespace, String name) {
+        List<Symbol> symbols = program.getSymbolTable().getSymbols(name, namespace);
+        for (Symbol symbol : symbols) {
+            if (symbol != null && !symbol.isDeleted()) {
+                return symbol;
+            }
+        }
+        Symbol classSymbol = program.getSymbolTable().getClassSymbol(name, namespace);
+        if (classSymbol != null && !classSymbol.isDeleted()) {
+            return classSymbol;
+        }
+        return null;
+    }
+
+    private String makeUniqueChildName(Program program, Namespace namespace, String baseName) {
+        String candidate = baseName;
+        int suffix = 1;
+        while (findChildSymbol(program, namespace, candidate) != null) {
+            candidate = baseName + "_" + suffix;
+            suffix++;
+        }
+        return candidate;
+    }
+
+    private String[] splitNamespacePath(String path) {
+        String normalized = path.replace('\\', '/');
+        normalized = normalized.replace("::", "/");
+        normalized = normalized.replaceAll("/+", "/");
+        if (normalized.startsWith("/")) {
+            normalized = normalized.substring(1);
+        }
+        if (normalized.endsWith("/")) {
+            normalized = normalized.substring(0, normalized.length() - 1);
+        }
+        return normalized.isBlank() ? new String[0] : normalized.split("/");
+    }
+
+    private String namespacePath(Namespace namespace) {
+        if (namespace == null || namespace.isGlobal()) {
+            return "<global>";
+        }
+        return String.join(Namespace.DELIMITER, namespace.getPathList(true));
+    }
+
+    private String namespaceKind(Namespace namespace) {
+        if (namespace instanceof GhidraClass || namespace.getType() == Namespace.Type.CLASS) {
+            return "class";
+        }
+        return "namespace";
+    }
+
+    private String symbolPath(Symbol symbol) {
+        if (symbol == null) {
+            return "";
+        }
+        return String.join(Namespace.DELIMITER, symbol.getPath());
+    }
+
+    private CategoryPath normalizeCategoryPath(String categoryPath) {
+        String normalized = trimToNull(categoryPath);
+        if (normalized == null || normalized.equals("/")) {
+            return CategoryPath.ROOT;
+        }
+        normalized = normalized.replace('\\', '/');
+        if (!normalized.startsWith("/")) {
+            normalized = "/" + normalized;
+        }
+        return new CategoryPath(normalized);
+    }
+
+    private DataType buildVtableSlotPointerType(Program program, CategoryPath categoryPath,
+                                                String slotName, String functionAddress,
+                                                String prototype) {
+        DataTypeManager dtm = program.getDataTypeManager();
+
+        if (functionAddress != null) {
+            Function function = resolveFunctionIdentifier(program, functionAddress);
+            if (function != null) {
+                FunctionDefinitionDataType definition = new FunctionDefinitionDataType(categoryPath, slotName + "Fn", function.getSignature(), dtm);
+                DataType resolved = dtm.resolve(definition, DataTypeConflictHandler.REPLACE_HANDLER);
+                return dtm.getPointer(resolved);
+            }
+        }
+
+        if (prototype != null) {
+            FunctionDefinitionDataType definition = parseFunctionDefinition(program, categoryPath, slotName + "Fn", prototype);
+            if (definition != null) {
+                DataType resolved = dtm.resolve(definition, DataTypeConflictHandler.REPLACE_HANDLER);
+                return dtm.getPointer(resolved);
+            }
+        }
+
+        return dtm.getPointer(new Undefined1DataType());
+    }
+
+    private FunctionDefinitionDataType parseFunctionDefinition(Program program, CategoryPath categoryPath,
+                                                               String name, String prototype) {
+        DataTypeManager dtm = program.getDataTypeManager();
+        ghidra.app.services.DataTypeManagerService dtms =
+            tool.getService(ghidra.app.services.DataTypeManagerService.class);
+        ghidra.app.util.parser.FunctionSignatureParser parser =
+            new ghidra.app.util.parser.FunctionSignatureParser(dtm, dtms);
+
+        for (String candidate : buildPrototypeCandidates(prototype)) {
+            try {
+                return new FunctionDefinitionDataType(categoryPath, name, parser.parse(null, candidate), dtm);
+            } catch (Exception ignored) {
+                // Try the next normalized candidate.
+            }
+        }
+        return null;
+    }
+
+    private Address resolveVtableEntryTarget(Program program, Address entryAddress, int pointerSize) {
+        try {
+            Reference[] refs = program.getReferenceManager().getReferencesFrom(entryAddress);
+            if (refs != null) {
+                for (Reference ref : refs) {
+                    if (ref != null && ref.getToAddress() != null) {
+                        return ref.getToAddress();
+                    }
+                }
+            }
+
+            byte[] data = new byte[pointerSize];
+            int read = program.getMemory().getBytes(entryAddress, data);
+            if (read != pointerSize) {
+                return null;
+            }
+
+            if (pointerSize == 4) {
+                int offset = (data[0] & 0xff) | ((data[1] & 0xff) << 8);
+                int segment = (data[2] & 0xff) | ((data[3] & 0xff) << 8);
+                Address segmentedAddress = parseAddress(program,
+                    String.format(Locale.ROOT, "%04x:%04x", segment, offset));
+                if (segmentedAddress != null) {
+                    return segmentedAddress;
+                }
+            }
+
+            long flatValue = 0;
+            for (int index = 0; index < pointerSize; index++) {
+                flatValue |= (long) (data[index] & 0xff) << (index * 8);
+            }
+            return program.getAddressFactory().getDefaultAddressSpace().getAddress(flatValue);
+        } catch (Exception e) {
+            return null;
         }
     }
 
@@ -2510,76 +3892,134 @@ public class GhidraMCPPlugin extends Plugin {
      * @return The resolved DataType, or null if not found
      */
     private DataType resolveDataType(DataTypeManager dtm, String typeName) {
+        String normalizedTypeName = normalizeWhitespace(typeName);
+        if (normalizedTypeName.isBlank()) {
+            return null;
+        }
+
+        int pointerDepth = 0;
+        while (normalizedTypeName.endsWith("*")) {
+            pointerDepth++;
+            normalizedTypeName = normalizeWhitespace(normalizedTypeName.substring(0, normalizedTypeName.length() - 1));
+        }
+
+        if (normalizedTypeName.regionMatches(true, 0, "struct ", 0, 7)) {
+            normalizedTypeName = normalizedTypeName.substring(7).trim();
+        }
+
         // First try to find exact match in all categories
-        DataType dataType = findDataTypeByNameInAllCategories(dtm, typeName);
+        DataType dataType = findDataTypeByNameInAllCategories(dtm, normalizedTypeName);
         if (dataType != null) {
             Msg.info(this, "Found exact data type match: " + dataType.getPathName());
+            for (int index = 0; index < pointerDepth; index++) {
+                dataType = dtm.getPointer(dataType);
+            }
             return dataType;
         }
 
+        DataType pathType = dtm.getDataType(normalizedTypeName);
+        if (pathType == null && !normalizedTypeName.startsWith("/")) {
+            pathType = dtm.getDataType("/" + normalizedTypeName);
+        }
+        if (pathType != null) {
+            for (int index = 0; index < pointerDepth; index++) {
+                pathType = dtm.getPointer(pathType);
+            }
+            return pathType;
+        }
+
         // Check for Windows-style pointer types (PXXX)
-        if (typeName.startsWith("P") && typeName.length() > 1) {
-            String baseTypeName = typeName.substring(1);
+        if (normalizedTypeName.startsWith("P") && normalizedTypeName.length() > 1) {
+            String baseTypeName = normalizedTypeName.substring(1);
 
             // Special case for PVOID
             if (baseTypeName.equals("VOID")) {
-                return new PointerDataType(dtm.getDataType("/void"));
+                dataType = dtm.getPointer(dtm.getDataType("/void"));
+                for (int index = 0; index < pointerDepth; index++) {
+                    dataType = dtm.getPointer(dataType);
+                }
+                return dataType;
             }
 
             // Try to find the base type
             DataType baseType = findDataTypeByNameInAllCategories(dtm, baseTypeName);
             if (baseType != null) {
-                return new PointerDataType(baseType);
+                dataType = dtm.getPointer(baseType);
+                for (int index = 0; index < pointerDepth; index++) {
+                    dataType = dtm.getPointer(dataType);
+                }
+                return dataType;
             }
 
-            Msg.warn(this, "Base type not found for " + typeName + ", defaulting to void*");
-            return new PointerDataType(dtm.getDataType("/void"));
+            Msg.warn(this, "Base type not found for " + normalizedTypeName + ", defaulting to void*");
+            dataType = dtm.getPointer(dtm.getDataType("/void"));
+            for (int index = 0; index < pointerDepth; index++) {
+                dataType = dtm.getPointer(dataType);
+            }
+            return dataType;
         }
 
         // Handle common built-in types
-        switch (typeName.toLowerCase()) {
+        switch (normalizedTypeName.toLowerCase()) {
             case "int":
             case "long":
-                return dtm.getDataType("/int");
+                dataType = dtm.getDataType("/int");
+                break;
             case "uint":
             case "unsigned int":
             case "unsigned long":
             case "dword":
-                return dtm.getDataType("/uint");
+                dataType = dtm.getDataType("/uint");
+                break;
             case "short":
-                return dtm.getDataType("/short");
+                dataType = dtm.getDataType("/short");
+                break;
             case "ushort":
             case "unsigned short":
             case "word":
-                return dtm.getDataType("/ushort");
+                dataType = dtm.getDataType("/ushort");
+                break;
             case "char":
             case "byte":
-                return dtm.getDataType("/char");
+                dataType = dtm.getDataType("/char");
+                break;
             case "uchar":
             case "unsigned char":
-                return dtm.getDataType("/uchar");
+                dataType = dtm.getDataType("/uchar");
+                break;
             case "longlong":
             case "__int64":
-                return dtm.getDataType("/longlong");
+                dataType = dtm.getDataType("/longlong");
+                break;
             case "ulonglong":
             case "unsigned __int64":
-                return dtm.getDataType("/ulonglong");
+                dataType = dtm.getDataType("/ulonglong");
+                break;
             case "bool":
             case "boolean":
-                return dtm.getDataType("/bool");
+                dataType = dtm.getDataType("/bool");
+                break;
             case "void":
-                return dtm.getDataType("/void");
+                dataType = dtm.getDataType("/void");
+                break;
             default:
                 // Try as a direct path
-                DataType directType = dtm.getDataType("/" + typeName);
+                DataType directType = dtm.getDataType("/" + normalizedTypeName);
                 if (directType != null) {
-                    return directType;
+                    dataType = directType;
+                    break;
                 }
 
                 // Fallback to int if we couldn't find it
-                Msg.warn(this, "Unknown type: " + typeName + ", defaulting to int");
-                return dtm.getDataType("/int");
+                Msg.warn(this, "Unknown type: " + normalizedTypeName + ", defaulting to int");
+                dataType = dtm.getDataType("/int");
+                break;
         }
+
+        for (int index = 0; index < pointerDepth; index++) {
+            dataType = dtm.getPointer(dataType);
+        }
+        return dataType;
     }
     
     /**
@@ -4322,6 +5762,7 @@ public class GhidraMCPPlugin extends Plugin {
     private String getRuntimeCapabilities() {
         Program program = getCurrentProgram();
         ReadonlyScriptCapability capability = probeReadonlyScriptCapability(program);
+        WriteScriptCapability writeCapability = probeWriteScriptCapability(program);
 
         StringBuilder out = new StringBuilder();
         out.append("active_program_loaded=").append(program != null).append("\n");
@@ -4334,6 +5775,13 @@ public class GhidraMCPPlugin extends Plugin {
         if (capability.detail != null && !capability.detail.isBlank()) {
             out.append("readonly_script_detail=").append(escapeNonAscii(capability.detail)).append("\n");
         }
+        out.append("write_script_supported=").append(writeCapability.supported).append("\n");
+        out.append("write_script_status=").append(writeCapability.status).append("\n");
+        out.append("write_script_reason=").append(writeCapability.reason).append("\n");
+        if (writeCapability.detail != null && !writeCapability.detail.isBlank()) {
+            out.append("write_script_detail=").append(escapeNonAscii(writeCapability.detail)).append("\n");
+        }
+        out.append("write_script_dry_run_supported=true\n");
         out.append("read_only_program_open_supported=false\n");
         out.append("explicit_write_target_selection_supported=true\n");
         out.append("explicit_write_target_fields=project_dir,project_name,folder_path,program_name");
@@ -4414,9 +5862,130 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    private String runWriteScript(String scriptPath, String scriptText, boolean dryRun,
+                                  Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        try {
+            WriteScriptCapability capability = probeWriteScriptCapability(context.program);
+            if (!capability.supported) {
+                return formatTargetedResponse(context, formatWriteUnsupportedResponse(capability));
+            }
+
+            boolean hasPath = scriptPath != null && !scriptPath.isBlank();
+            boolean hasText = scriptText != null && !scriptText.isBlank();
+            if (!hasPath && !hasText) {
+                return formatTargetedResponse(context, "Provide script_path or script_text");
+            }
+            if (hasPath && hasText) {
+                return formatTargetedResponse(context, "Provide only one of script_path or script_text");
+            }
+
+            generic.jar.ResourceFile scriptFile = null;
+            boolean deleteAfterRun = false;
+            int tx = -1;
+            boolean commit = false;
+            try {
+                if (hasPath) {
+                    scriptFile = resolveScriptPath(scriptPath);
+                    if (scriptFile == null || !scriptFile.exists()) {
+                        return formatTargetedResponse(context, "Script file not found: " + scriptPath);
+                    }
+                }
+                else {
+                    validateWriteScriptText(scriptText);
+                    scriptFile = writeTempScript(scriptText, "mcp_write_");
+                    deleteAfterRun = true;
+                }
+
+                String loadedScriptText = loadScriptTextForValidation(scriptFile);
+                validateWriteScriptText(loadedScriptText);
+
+                if (dryRun) {
+                    return formatTargetedResponse(context,
+                        "status=dry_run\n"
+                            + "operation=run_write_script\n"
+                            + "dry_run=true\n"
+                            + "validated=true\n"
+                            + "target_program=" + safeValueForResponse(context.program.getName()));
+                }
+
+                GhidraScriptProvider provider = GhidraScriptUtil.getProvider(scriptFile);
+                if (provider == null) {
+                    return formatTargetedResponse(context, "No script provider for file: " + scriptFile.getName());
+                }
+
+                StringWriter outputBuffer = new StringWriter();
+                PrintWriter writer = new PrintWriter(outputBuffer, true);
+                GhidraScript script = provider.getScriptInstance(scriptFile, writer);
+                if (script == null) {
+                    return formatTargetedResponse(context, "Unable to load script");
+                }
+
+                GhidraState state = new GhidraState(
+                    tool,
+                    tool.getProject(),
+                    context.program,
+                    null,
+                    null,
+                    null);
+
+                tx = context.program.startTransaction("Run write script");
+                script.execute(state, new ConsoleTaskMonitor(), writer);
+                commit = true;
+
+                StringBuilder out = new StringBuilder();
+                out.append("status=ok\n")
+                    .append("operation=run_write_script\n")
+                    .append("dry_run=false\n")
+                    .append("transaction_committed=true\n")
+                    .append("target_program=").append(safeValueForResponse(context.program.getName()));
+
+                String output = outputBuffer.toString().trim();
+                if (!output.isBlank()) {
+                    out.append("\nscript_output_begin\n")
+                        .append(output)
+                        .append("\nscript_output_end");
+                }
+                if (context.explicitTarget) {
+                    out.append("\n").append(saveExplicitTargetIfNeeded(context));
+                }
+                return formatTargetedResponse(context, out.toString());
+            } catch (Exception e) {
+                Throwable cause = unwrapReflectionFailure(e);
+                String detail = cause.getMessage() == null ? cause.toString() : cause.getMessage();
+                return formatTargetedResponse(context,
+                    "status=failed\n"
+                        + "operation=run_write_script\n"
+                        + "dry_run=" + dryRun + "\n"
+                        + "reason=execution_failed\n"
+                        + "detail=" + escapeNonAscii(detail));
+            } finally {
+                if (tx != -1) {
+                    context.program.endTransaction(tx, commit);
+                }
+                if (deleteAfterRun && scriptFile != null) {
+                    scriptFile.delete();
+                }
+            }
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
     private String formatReadonlyUnsupportedResponse(ReadonlyScriptCapability capability) {
         return "status=" + capability.status + "\n"
             + "operation=run_readonly_script\n"
+            + "reason=" + capability.reason + "\n"
+            + "detail=" + escapeNonAscii(capability.detail == null ? "" : capability.detail);
+    }
+
+    private String formatWriteUnsupportedResponse(WriteScriptCapability capability) {
+        return "status=" + capability.status + "\n"
+            + "operation=run_write_script\n"
             + "reason=" + capability.reason + "\n"
             + "detail=" + escapeNonAscii(capability.detail == null ? "" : capability.detail);
     }
@@ -4469,6 +6038,28 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    private WriteScriptCapability probeWriteScriptCapability(Program program) {
+        ReadonlyScriptCapability readonlyCapability = probeReadonlyScriptCapability(program);
+        if (!readonlyCapability.supported) {
+            return new WriteScriptCapability(false, readonlyCapability.status,
+                readonlyCapability.reason, readonlyCapability.detail);
+        }
+        if (program == null) {
+            return new WriteScriptCapability(false, "unsupported", "no_program_loaded", "No program loaded");
+        }
+        ghidra.framework.model.DomainFile df = program.getDomainFile();
+        if (df != null && df.isReadOnly()) {
+            return new WriteScriptCapability(false, "unsupported", "read_only_domain_file",
+                "Active target domain file is read-only");
+        }
+        if (!program.canSave()) {
+            return new WriteScriptCapability(false, "unsupported", "program_cannot_save",
+                "Active target program cannot be saved");
+        }
+        return new WriteScriptCapability(true, "supported", "available",
+            "Live write scripting available for the active writable program context");
+    }
+
     private generic.jar.ResourceFile resolveScriptPath(String scriptPath) {
         if (scriptPath == null || scriptPath.isBlank()) {
             return null;
@@ -4488,6 +6079,10 @@ public class GhidraMCPPlugin extends Plugin {
     }
 
     private generic.jar.ResourceFile writeTempReadonlyScript(String scriptText) throws IOException {
+        return writeTempScript(scriptText, "mcp_readonly_");
+    }
+
+    private generic.jar.ResourceFile writeTempScript(String scriptText, String prefix) throws IOException {
         generic.jar.ResourceFile userDir = GhidraScriptUtil.getUserScriptDirectory();
         if (userDir == null) {
             throw new IOException("Ghidra user script directory not available");
@@ -4496,7 +6091,7 @@ public class GhidraMCPPlugin extends Plugin {
             userDir.mkdir();
         }
 
-        String filename = "mcp_readonly_" + System.currentTimeMillis() + ".py";
+        String filename = prefix + System.currentTimeMillis() + ".py";
         generic.jar.ResourceFile scriptFile = new generic.jar.ResourceFile(userDir, filename);
         try (OutputStream os = scriptFile.getOutputStream()) {
             os.write(scriptText.getBytes(StandardCharsets.UTF_8));
@@ -4536,6 +6131,36 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    private void validateWriteScriptText(String scriptText) {
+        if (scriptText == null) {
+            throw new IllegalArgumentException("script text is required");
+        }
+
+        String text = scriptText.toLowerCase(Locale.ROOT);
+        String[] blockedTokens = new String[] {
+            "starttransaction(",
+            "endtransaction(",
+            "setbytes(",
+            "putbytes(",
+            "patchbyte",
+            "patchbytes",
+            "creatememoryblock",
+            "removememoryblock",
+            "openprogram(",
+            "openproject(",
+            "saveas(",
+            "deletefile(",
+            "deleteproject(",
+            "rundoscommand(",
+            "runcommand("};
+
+        for (String token : blockedTokens) {
+            if (text.contains(token)) {
+                throw new IllegalArgumentException("script rejected by write policy: token " + token);
+            }
+        }
+    }
+
     // ----------------------------------------------------------------------------------
     // Utility: parse query params, parse post params, pagination, etc.
     // ----------------------------------------------------------------------------------
@@ -4570,12 +6195,27 @@ public class GhidraMCPPlugin extends Plugin {
      */
     private Map<String, String> parsePostParams(HttpExchange exchange) throws IOException {
         byte[] body = exchange.getRequestBody().readAllBytes();
-        String bodyStr = new String(body, StandardCharsets.UTF_8);
+        String bodyStr = new String(body, StandardCharsets.UTF_8).trim();
+        if (bodyStr.isEmpty()) {
+            return new HashMap<>();
+        }
+
+        String contentType = exchange.getRequestHeaders().getFirst("Content-Type");
+        String normalizedContentType = contentType == null ? "" : contentType.toLowerCase(Locale.ROOT);
+        if (normalizedContentType.contains("application/json") || bodyStr.startsWith("{")) {
+            return parseJsonPostParams(bodyStr);
+        }
+        if (normalizedContentType.contains("application/x-www-form-urlencoded") || bodyStr.contains("=")) {
+            return parseFormPostParams(bodyStr);
+        }
+        throw new IOException("unsupported-content-type: expected application/json or application/x-www-form-urlencoded body");
+    }
+
+    private Map<String, String> parseFormPostParams(String bodyStr) {
         Map<String, String> params = new HashMap<>();
         for (String pair : bodyStr.split("&")) {
             String[] kv = pair.split("=", 2);
             if (kv.length == 2) {
-                // URL decode parameter values
                 try {
                     String key = URLDecoder.decode(kv[0], StandardCharsets.UTF_8);
                     String value = URLDecoder.decode(kv[1], StandardCharsets.UTF_8);
@@ -4586,6 +6226,188 @@ public class GhidraMCPPlugin extends Plugin {
             }
         }
         return params;
+    }
+
+    private Map<String, String> parseJsonPostParams(String bodyStr) throws IOException {
+        Map<String, String> params = new LinkedHashMap<>();
+        int index = skipJsonWhitespace(bodyStr, 0);
+        if (index >= bodyStr.length() || bodyStr.charAt(index) != '{') {
+            throw new IOException("unsupported-content-type: expected a JSON object body");
+        }
+        index++;
+
+        while (true) {
+            index = skipJsonWhitespace(bodyStr, index);
+            if (index >= bodyStr.length()) {
+                throw new IOException("invalid-json-body: unexpected end of input");
+            }
+            if (bodyStr.charAt(index) == '}') {
+                return params;
+            }
+
+            JsonToken keyToken = parseJsonStringToken(bodyStr, index);
+            index = skipJsonWhitespace(bodyStr, keyToken.nextIndex);
+            if (index >= bodyStr.length() || bodyStr.charAt(index) != ':') {
+                throw new IOException("invalid-json-body: expected ':' after key");
+            }
+            index++;
+
+            JsonToken valueToken = parseJsonValueToken(bodyStr, index);
+            params.put(keyToken.value, valueToken.value);
+            index = skipJsonWhitespace(bodyStr, valueToken.nextIndex);
+            if (index >= bodyStr.length()) {
+                throw new IOException("invalid-json-body: unexpected end of input after value");
+            }
+
+            char delimiter = bodyStr.charAt(index);
+            if (delimiter == ',') {
+                index++;
+                continue;
+            }
+            if (delimiter == '}') {
+                return params;
+            }
+            throw new IOException("invalid-json-body: expected ',' or '}'");
+        }
+    }
+
+    private static class JsonToken {
+        private final String value;
+        private final int nextIndex;
+
+        private JsonToken(String value, int nextIndex) {
+            this.value = value;
+            this.nextIndex = nextIndex;
+        }
+    }
+
+    private int skipJsonWhitespace(String text, int index) {
+        int current = index;
+        while (current < text.length() && Character.isWhitespace(text.charAt(current))) {
+            current++;
+        }
+        return current;
+    }
+
+    private JsonToken parseJsonStringToken(String text, int index) throws IOException {
+        int current = skipJsonWhitespace(text, index);
+        if (current >= text.length() || text.charAt(current) != '"') {
+            throw new IOException("invalid-json-body: expected string token");
+        }
+        current++;
+        StringBuilder out = new StringBuilder();
+        while (current < text.length()) {
+            char c = text.charAt(current++);
+            if (c == '"') {
+                return new JsonToken(out.toString(), current);
+            }
+            if (c == '\\') {
+                if (current >= text.length()) {
+                    throw new IOException("invalid-json-body: incomplete escape sequence");
+                }
+                char escaped = text.charAt(current++);
+                switch (escaped) {
+                    case '"': out.append('"'); break;
+                    case '\\': out.append('\\'); break;
+                    case '/': out.append('/'); break;
+                    case 'b': out.append('\b'); break;
+                    case 'f': out.append('\f'); break;
+                    case 'n': out.append('\n'); break;
+                    case 'r': out.append('\r'); break;
+                    case 't': out.append('\t'); break;
+                    case 'u':
+                        if (current + 4 > text.length()) {
+                            throw new IOException("invalid-json-body: incomplete unicode escape");
+                        }
+                        String hex = text.substring(current, current + 4);
+                        current += 4;
+                        try {
+                            out.append((char) Integer.parseInt(hex, 16));
+                        } catch (NumberFormatException e) {
+                            throw new IOException("invalid-json-body: bad unicode escape \\u" + hex);
+                        }
+                        break;
+                    default:
+                        throw new IOException("invalid-json-body: unsupported escape \\" + escaped);
+                }
+            }
+            else {
+                out.append(c);
+            }
+        }
+        throw new IOException("invalid-json-body: unterminated string");
+    }
+
+    private JsonToken parseJsonValueToken(String text, int index) throws IOException {
+        int current = skipJsonWhitespace(text, index);
+        if (current >= text.length()) {
+            throw new IOException("invalid-json-body: missing value");
+        }
+        char c = text.charAt(current);
+        if (c == '"') {
+            return parseJsonStringToken(text, current);
+        }
+        if (c == '{' || c == '[') {
+            return parseJsonStructuredValue(text, current);
+        }
+
+        int start = current;
+        while (current < text.length()) {
+            char next = text.charAt(current);
+            if (next == ',' || next == '}' || next == ']' || Character.isWhitespace(next)) {
+                break;
+            }
+            current++;
+        }
+        String raw = text.substring(start, current).trim();
+        if (raw.isEmpty()) {
+            throw new IOException("invalid-json-body: empty value");
+        }
+        if ("null".equals(raw)) {
+            return new JsonToken("", current);
+        }
+        return new JsonToken(raw, current);
+    }
+
+    private JsonToken parseJsonStructuredValue(String text, int index) throws IOException {
+        int current = index;
+        char opener = text.charAt(current);
+        char closer = opener == '{' ? '}' : ']';
+        int depth = 0;
+        boolean inString = false;
+        boolean escaping = false;
+
+        while (current < text.length()) {
+            char c = text.charAt(current++);
+            if (inString) {
+                if (escaping) {
+                    escaping = false;
+                }
+                else if (c == '\\') {
+                    escaping = true;
+                }
+                else if (c == '"') {
+                    inString = false;
+                }
+                continue;
+            }
+
+            if (c == '"') {
+                inString = true;
+                continue;
+            }
+            if (c == opener) {
+                depth++;
+                continue;
+            }
+            if (c == closer) {
+                depth--;
+                if (depth == 0) {
+                    return new JsonToken(text.substring(index, current), current);
+                }
+            }
+        }
+        throw new IOException("invalid-json-body: unterminated structured value");
     }
 
     /**
