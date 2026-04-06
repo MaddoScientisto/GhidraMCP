@@ -3673,11 +3673,7 @@ public class GhidraMCPPlugin extends Plugin {
 
         try {
             if (normalizedCallingConvention != null) {
-                try {
-                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, true));
-                } catch (InvalidInputException firstError) {
-                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, false));
-                }
+                applyCallingConventionWithFallback(function, normalizedCallingConvention);
             }
 
             if (replacementParameters != null) {
@@ -3761,20 +3757,20 @@ public class GhidraMCPPlugin extends Plugin {
             return VariableStorage.VOID_STORAGE;
         }
 
-        try {
-            return VariableStorage.deserialize(program, normalized);
-        } catch (InvalidInputException ignored) {
-            // Fall through to convenience formats below.
-        }
-
         if (normalized.regionMatches(true, 0, "stack:", 0, 6)) {
             String[] parts = normalized.split(":", 3);
             if (parts.length < 3) {
                 throw new InvalidInputException("stack storage must use stack:offset:size");
             }
-            int offset = Integer.decode(parts[1]);
+            int offset = parseStorageOffsetToken(parts[1]);
             int size = Integer.decode(parts[2]);
             return new VariableStorage(program, offset, size);
+        }
+
+        try {
+            return VariableStorage.deserialize(program, normalized);
+        } catch (InvalidInputException ignored) {
+            // Fall through to convenience formats below.
         }
 
         String registerSpec = normalized;
@@ -3802,6 +3798,62 @@ public class GhidraMCPPlugin extends Plugin {
 
         throw new InvalidInputException("Unsupported storage specification: " + storageSpec
             + " (use existing, dynamic, stack:offset:size, reg:AX, or raw Ghidra serialization)");
+    }
+
+    private int parseStorageOffsetToken(String token) {
+        String normalized = trimToNull(token);
+        if (normalized == null) {
+            throw new NumberFormatException("stack offset is required");
+        }
+
+        if (normalized.startsWith("+") || normalized.startsWith("-")) {
+            String sign = normalized.substring(0, 1);
+            String rest = normalized.substring(1);
+            if (rest.regionMatches(true, 0, "0x", 0, 2)) {
+                return Integer.decode(normalized);
+            }
+            return Integer.parseInt(sign + Integer.toString(Integer.parseInt(rest, 16)));
+        }
+
+        if (normalized.regionMatches(true, 0, "0x", 0, 2)) {
+            return Integer.decode(normalized);
+        }
+        return Integer.parseInt(normalized, 16);
+    }
+
+    private void applyCallingConventionWithFallback(Function function, String callingConvention)
+            throws InvalidInputException {
+        String requested = normalizeWhitespace(callingConvention);
+        if (requested.isBlank()) {
+            return;
+        }
+
+        LinkedHashSet<String> candidates = new LinkedHashSet<>();
+        candidates.add(requested);
+
+        String mappedLegacy = normalizeLegacyCallingConventions(requested, true);
+        if (!mappedLegacy.isBlank()) {
+            candidates.add(mappedLegacy);
+        }
+
+        String strippedLegacy = normalizeLegacyCallingConventions(requested, false);
+        if (!strippedLegacy.isBlank()) {
+            candidates.add(strippedLegacy);
+        }
+
+        InvalidInputException lastError = null;
+        for (String candidate : candidates) {
+            try {
+                function.setCallingConvention(candidate);
+                return;
+            } catch (InvalidInputException e) {
+                lastError = e;
+            }
+        }
+
+        if (lastError != null) {
+            throw lastError;
+        }
     }
 
     private String describeVariableStorage(VariableStorage storage) {
