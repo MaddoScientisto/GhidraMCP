@@ -63,6 +63,34 @@ def safe_post(endpoint: str, data: dict | str) -> str:
         return f"{recap}\nRequest failed: {str(e)}"
 
 
+def _response_has_route_or_context_error(result: list[str] | str) -> bool:
+    return _response_has_http_404(result) or _response_has_context_error(result)
+
+
+def _safe_get_with_alias_fallback(endpoint: str, params: dict | None = None, *aliases: str) -> list:
+    result = safe_get(endpoint, params)
+    if not _response_has_route_or_context_error(result):
+        return result
+
+    for alias in aliases:
+        alias_result = safe_get(alias, params)
+        if not _response_has_route_or_context_error(alias_result):
+            return alias_result
+    return result
+
+
+def _safe_post_with_alias_fallback(endpoint: str, data: dict | str, *aliases: str) -> str:
+    result = safe_post(endpoint, data)
+    if not _response_has_route_or_context_error(result):
+        return result
+
+    for alias in aliases:
+        alias_result = safe_post(alias, data)
+        if not _response_has_route_or_context_error(alias_result):
+            return alias_result
+    return result
+
+
 def _response_has_http_404(result: list[str] | str) -> bool:
     if isinstance(result, list):
         return any("Error 404" in line for line in result)
@@ -725,7 +753,7 @@ def get_runtime_capabilities() -> str:
     """
     Report runtime capabilities, including readonly-script support state.
     """
-    return "\n".join(safe_get("get_runtime_capabilities"))
+    return "\n".join(_safe_get_with_alias_fallback("get_runtime_capabilities", None, "runtime_capabilities"))
 
 @mcp.tool()
 def open_current_program_readonly(version: int = -1, make_current: bool = True) -> str:
@@ -752,11 +780,11 @@ def run_write_script(script_path: str = "", script_text: str = "", dry_run: bool
     """
     Run a constrained live write-capable Ghidra script against a writable target program.
     """
-    return safe_post("run_write_script", _with_target_params({
+    return _safe_post_with_alias_fallback("run_write_script", _with_target_params({
         "script_path": script_path,
         "script_text": script_text,
         "dry_run": str(dry_run).lower(),
-    }, project_dir, project_name, folder_path, program_name))
+    }, project_dir, project_name, folder_path, program_name), "run_transaction_script")
 
 @mcp.tool()
 def set_decompiler_comment(address: str, comment: str) -> str:
@@ -799,6 +827,42 @@ def set_function_prototype(function_address: str, prototype: str) -> str:
     Set a function's prototype.
     """
     return safe_post("set_function_prototype", {"function_address": function_address, "prototype": prototype})
+
+@mcp.tool()
+def set_function_prototype_storage(function_address: str, parameters: list[dict[str, str]] | None = None, return_type: str = "", return_storage: str = "", calling_convention: str = "", has_varargs: bool | None = None, dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
+    """
+    Set a function prototype with explicit return and parameter storage.
+
+    Parameter entries are applied in order and accept:
+    - name: parameter name
+    - type: datatype name/path
+    - storage: optional storage spec such as existing, dynamic, reg:AX, AX:DX, or stack:-6:2
+    """
+    parameter_lines: list[str] = []
+    for parameter in parameters or []:
+        parameter_lines.append("|".join([
+            str(parameter.get("name", "")),
+            str(parameter.get("type", "")),
+            str(parameter.get("storage", "")),
+        ]))
+
+    payload = _with_target_params({
+        "function_address": function_address,
+        "parameters": "\n".join(parameter_lines),
+        "return_type": return_type,
+        "return_storage": return_storage,
+        "calling_convention": calling_convention,
+        "dry_run": str(dry_run).lower(),
+    }, project_dir, project_name, folder_path, program_name)
+
+    if has_varargs is not None:
+        payload["has_varargs"] = str(has_varargs).lower()
+
+    return _safe_post_with_alias_fallback(
+        "set_function_prototype_storage",
+        payload,
+        "set_storage_aware_prototype",
+    )
 
 @mcp.tool()
 def set_local_variable_type(function_address: str, variable_name: str, new_type: str) -> str:
@@ -1030,14 +1094,14 @@ def set_function_class(function_address: str, class_path: str, method_name: str 
     """
     Move a function under a class namespace and optionally apply method metadata.
     """
-    return safe_post("set_function_class", _with_target_params({
+    return _safe_post_with_alias_fallback("set_function_class", _with_target_params({
         "function_address": function_address,
         "class_path": class_path,
         "method_name": method_name,
         "this_param_name": this_param_name,
         "calling_convention": calling_convention,
         "dry_run": str(dry_run).lower(),
-    }, project_dir, project_name, folder_path, program_name))
+    }, project_dir, project_name, folder_path, program_name), "move_function_to_class")
 
 def _build_struct_field_lines(fields: list[dict[str, str]]) -> tuple[list[str], str | None]:
     if not isinstance(fields, list):
@@ -1129,26 +1193,26 @@ def create_or_update_vtable(name: str, slots: list[dict[str, str]], category_pat
     lines, error = _build_vtable_slot_lines(slots)
     if error:
         return error
-    return safe_post("create_or_update_vtable", _with_target_params({
+    return _safe_post_with_alias_fallback("create_or_update_vtable", _with_target_params({
         "name": name,
         "category_path": category_path,
         "slots": "\n".join(lines),
         "dry_run": str(dry_run).lower(),
-    }, project_dir, project_name, folder_path, program_name))
+    }, project_dir, project_name, folder_path, program_name), "build_vtable")
 
 @mcp.tool()
 def set_function_this_type(function_address: str, this_type: str, this_param_name: str = "this", this_storage: str = "", calling_convention: str = "", dry_run: bool = False, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:
     """
     Apply or update this-pointer typing on a function.
     """
-    return safe_post("set_function_this_type", _with_target_params({
+    return _safe_post_with_alias_fallback("set_function_this_type", _with_target_params({
         "function_address": function_address,
         "this_type": this_type,
         "this_param_name": this_param_name,
         "this_storage": this_storage,
         "calling_convention": calling_convention,
         "dry_run": str(dry_run).lower(),
-    }, project_dir, project_name, folder_path, program_name))
+    }, project_dir, project_name, folder_path, program_name), "set_this_type")
 
 @mcp.tool()
 def analyze_vtable(address: str, slot_count: int = 0, stop_on_invalid_pointer: bool = True, project_dir: str = "", project_name: str = "", folder_path: str = "", program_name: str = "") -> str:

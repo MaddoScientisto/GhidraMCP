@@ -69,6 +69,9 @@ import java.lang.reflect.InvocationTargetException;
 import java.net.InetSocketAddress;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -403,6 +406,36 @@ public class GhidraMCPPlugin extends Plugin {
             } else {
                 sendResponse(exchange, base + "\n" + result.getErrorMessage());
             }
+        });
+
+        server.createContext("/set_function_prototype_storage", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, setFunctionPrototypeStorage(
+                params.get("function_address"),
+                params.get("return_type"),
+                params.get("return_storage"),
+                params.get("parameters"),
+                params.get("calling_convention"),
+                parseBooleanOrDefault(params.get("has_varargs"), false),
+                params.containsKey("has_varargs"),
+                dryRun,
+                params));
+        });
+
+        server.createContext("/set_storage_aware_prototype", exchange -> {
+            Map<String, String> params = parsePostParams(exchange);
+            boolean dryRun = parseBooleanOrDefault(params.get("dry_run"), false);
+            sendResponse(exchange, setFunctionPrototypeStorage(
+                params.get("function_address"),
+                params.get("return_type"),
+                params.get("return_storage"),
+                params.get("parameters"),
+                params.get("calling_convention"),
+                parseBooleanOrDefault(params.get("has_varargs"), false),
+                params.containsKey("has_varargs"),
+                dryRun,
+                params));
         });
 
         server.createContext("/set_local_variable_type", exchange -> {
@@ -1658,6 +1691,33 @@ public class GhidraMCPPlugin extends Plugin {
         return normalized;
     }
 
+    private String normalizeProjectDir(String projectDir) {
+        String normalized = trimToNull(projectDir);
+        if (normalized == null) {
+            return null;
+        }
+
+        normalized = normalized.replace('/', '\\');
+        try {
+            Path path = Paths.get(normalized).normalize();
+            normalized = path.toString();
+        } catch (InvalidPathException e) {
+            Msg.debug(this, "Failed to normalize project path, using raw value", e);
+        }
+        return normalized;
+    }
+
+    private boolean isWindowsPath(String value) {
+        return value != null && value.length() >= 2 && Character.isLetter(value.charAt(0)) && value.charAt(1) == ':';
+    }
+
+    private boolean equalsTargetText(String left, String right, boolean ignoreCase) {
+        if (left == null || right == null) {
+            return Objects.equals(left, right);
+        }
+        return ignoreCase ? left.equalsIgnoreCase(right) : left.equals(right);
+    }
+
     private String prefixedParamKey(String prefix, String key) {
         String normalized = prefix == null ? "" : prefix;
         return normalized.isEmpty() ? key : normalized + key;
@@ -1774,23 +1834,25 @@ public class GhidraMCPPlugin extends Plugin {
             return false;
         }
 
-        String targetProjectDir = trimToNull(projectDir);
+        String targetProjectDir = normalizeProjectDir(projectDir);
         String targetProjectName = trimToNull(projectName);
         String targetFolderPath = normalizeFolderPath(folderPath);
+        String actualProjectDir = normalizeProjectDir(locator.getLocation());
+        boolean ignoreCase = isWindowsPath(targetProjectDir) || isWindowsPath(actualProjectDir);
 
-        if (!projectName.equals(locator.getName())) {
+        if (!equalsTargetText(targetProjectName, locator.getName(), ignoreCase)) {
             return false;
         }
-        if (!projectDir.equals(locator.getLocation())) {
+        if (!equalsTargetText(targetProjectDir, actualProjectDir, ignoreCase)) {
             return false;
         }
-        if (!programName.equals(domainFile.getName())) {
+        if (!equalsTargetText(programName, domainFile.getName(), ignoreCase)) {
             return false;
         }
 
         ghidra.framework.model.DomainFolder parent = domainFile.getParent();
         String actualFolderPath = parent == null ? "/" : normalizeFolderPath(parent.getPathname());
-        return targetFolderPath.equals(actualFolderPath);
+        return equalsTargetText(targetFolderPath, actualFolderPath, ignoreCase);
     }
 
     private Program findMatchingOpenProgram(String projectDir, String projectName,
@@ -1828,10 +1890,34 @@ public class GhidraMCPPlugin extends Plugin {
                 prefixedSummaryKey(prefix, "current_program") + "=" + program.getName());
         }
 
-        String projectDir = trimToNull(params.get(prefixedParamKey(prefix, "project_dir")));
+        String projectDir = normalizeProjectDir(params.get(prefixedParamKey(prefix, "project_dir")));
         String projectName = trimToNull(params.get(prefixedParamKey(prefix, "project_name")));
         String programName = trimToNull(params.get(prefixedParamKey(prefix, "program_name")));
         String folderPath = normalizeFolderPath(params.get(prefixedParamKey(prefix, "folder_path")));
+
+        Program currentProgram = getCurrentProgram();
+        ghidra.framework.model.DomainFile currentDomainFile = currentProgram == null ? null : currentProgram.getDomainFile();
+        ghidra.framework.model.ProjectLocator currentLocator = currentDomainFile == null
+            ? null
+            : currentDomainFile.getProjectLocator();
+
+        if (currentLocator != null) {
+            String currentProjectDir = normalizeProjectDir(currentLocator.getLocation());
+            boolean ignoreCase = isWindowsPath(projectDir) || isWindowsPath(currentProjectDir);
+            if (projectDir == null) {
+                projectDir = currentProjectDir;
+            }
+            if (projectName == null) {
+                projectName = currentLocator.getName();
+            }
+            if (currentDomainFile != null && programName != null && "/".equals(folderPath)
+                && equalsTargetText(projectDir, currentProjectDir, ignoreCase)
+                && equalsTargetText(projectName, currentLocator.getName(), ignoreCase)
+                && equalsTargetText(programName, currentDomainFile.getName(), ignoreCase)) {
+                ghidra.framework.model.DomainFolder parent = currentDomainFile.getParent();
+                folderPath = parent == null ? "/" : normalizeFolderPath(parent.getPathname());
+            }
+        }
 
         List<String> missing = new ArrayList<>();
         if (projectDir == null) {
@@ -3267,6 +3353,18 @@ public class GhidraMCPPlugin extends Plugin {
         }
     }
 
+    private static class ParameterStorageSpec {
+        private final String name;
+        private final String typeName;
+        private final String storageSpec;
+
+        private ParameterStorageSpec(String name, String typeName, String storageSpec) {
+            this.name = name;
+            this.typeName = typeName;
+            this.storageSpec = storageSpec;
+        }
+    }
+
     /**
      * Rename a function by its address
      */
@@ -3336,7 +3434,7 @@ public class GhidraMCPPlugin extends Plugin {
         final AtomicBoolean success = new AtomicBoolean(false);
 
         try {
-            SwingUtilities.invokeAndWait(() -> 
+            SwingUtilities.invokeAndWait(() ->
                 applyFunctionPrototype(program, functionAddrStr, prototype, success, errorMessage));
         } catch (InterruptedException | InvocationTargetException e) {
             String msg = "Failed to set function prototype on Swing thread: " + e.getMessage();
@@ -3345,6 +3443,431 @@ public class GhidraMCPPlugin extends Plugin {
         }
 
         return new PrototypeResult(success.get(), errorMessage.toString());
+    }
+
+    private String setFunctionPrototypeStorage(String functionAddress, String returnType,
+                                               String returnStorage, String parameters,
+                                               String callingConvention, boolean hasVarargs,
+                                               boolean hasVarargsSpecified, boolean dryRun,
+                                               Map<String, String> params) {
+        ProgramTargetContext context = resolveWriteTargetContext(params);
+        if (context.hasError()) {
+            return context.errorMessage;
+        }
+
+        AtomicReference<OperationResult> resultRef = new AtomicReference<>(
+            new OperationResult(false, "set_function_prototype_storage failed"));
+        try {
+            SwingUtilities.invokeAndWait(() -> {
+                int tx = context.program.startTransaction("Set function prototype with storage");
+                boolean commit = false;
+                try {
+                    OperationResult result = setFunctionPrototypeStorageInProgram(
+                        context.program,
+                        functionAddress,
+                        returnType,
+                        returnStorage,
+                        parameters,
+                        callingConvention,
+                        hasVarargs,
+                        hasVarargsSpecified,
+                        dryRun);
+                    resultRef.set(result);
+                    commit = result.success && !dryRun;
+                } finally {
+                    context.program.endTransaction(tx, commit);
+                }
+            });
+        } catch (InterruptedException | InvocationTargetException e) {
+            resultRef.set(new OperationResult(false,
+                "Failed to set storage-aware prototype on Swing thread: " + e.getMessage()));
+        }
+
+        try {
+            String response = formatTargetedResponse(context, resultRef.get().message);
+            if (resultRef.get().success && context.explicitTarget && !dryRun) {
+                response = response + "\n" + saveExplicitTargetIfNeeded(context);
+            }
+            return response;
+        } finally {
+            closeWriteTargetContext(context);
+        }
+    }
+
+    private OperationResult setFunctionPrototypeStorageInProgram(Program program, String functionAddress,
+                                                                 String returnType, String returnStorage,
+                                                                 String parameters, String callingConvention,
+                                                                 boolean hasVarargs, boolean hasVarargsSpecified,
+                                                                 boolean dryRun) {
+        Address addr = parseAddress(program, functionAddress);
+        Function function = getFunctionForAddress(program, addr);
+        if (function == null) {
+            return new OperationResult(false, "function_address did not resolve to a function");
+        }
+
+        String normalizedReturnType = trimToNull(returnType);
+        String normalizedReturnStorage = trimToNull(returnStorage);
+        String normalizedParameters = trimToNull(parameters);
+        String normalizedCallingConvention = trimToNull(callingConvention);
+
+        if (normalizedReturnType == null && normalizedReturnStorage == null
+            && normalizedParameters == null && normalizedCallingConvention == null
+            && !hasVarargsSpecified) {
+            return new OperationResult(false,
+                "Provide return_type, return_storage, parameters, calling_convention, or has_varargs");
+        }
+
+        List<ParameterStorageSpec> parsedSpecs;
+        try {
+            parsedSpecs = parseParameterStorageSpecs(normalizedParameters);
+        } catch (IllegalArgumentException e) {
+            return new OperationResult(false, e.getMessage());
+        }
+
+        DataTypeManager dtm = program.getDataTypeManager();
+        DataType resolvedReturnType = normalizedReturnType == null
+            ? function.getReturnType()
+            : resolveDataType(dtm, normalizedReturnType);
+        if (resolvedReturnType == null) {
+            return new OperationResult(false, "Unable to resolve return_type: " + normalizedReturnType);
+        }
+
+        List<Variable> replacementParameters = null;
+        Function.FunctionUpdateType updateType = Function.FunctionUpdateType.DYNAMIC_STORAGE_ALL_PARAMS;
+        boolean customStorageRequested = false;
+        if (parsedSpecs != null) {
+            Parameter[] existingParameters = function.getParameters();
+            replacementParameters = new ArrayList<>();
+            boolean anyExplicitStorage = false;
+            boolean anyDynamicStorage = false;
+
+            for (int index = 0; index < parsedSpecs.size(); index++) {
+                ParameterStorageSpec spec = parsedSpecs.get(index);
+                String paramTypeName = trimToNull(spec.typeName);
+                if (paramTypeName == null) {
+                    return new OperationResult(false,
+                        "parameter line " + (index + 1) + " is missing a type name");
+                }
+
+                DataType resolvedParamType = resolveDataType(dtm, paramTypeName);
+                if (resolvedParamType == null) {
+                    return new OperationResult(false,
+                        "Unable to resolve parameter type on line " + (index + 1) + ": " + paramTypeName);
+                }
+
+                String requestedName = trimToNull(spec.name);
+                if (requestedName == null) {
+                    requestedName = Function.DEFAULT_PARAM_PREFIX + (index + 1);
+                }
+
+                String storageSpec = trimToNull(spec.storageSpec);
+                if (storageSpec == null || storageSpec.equalsIgnoreCase("dynamic")) {
+                    try {
+                        replacementParameters.add(new ParameterImpl(
+                            requestedName,
+                            resolvedParamType,
+                            program,
+                            SourceType.USER_DEFINED));
+                    } catch (InvalidInputException e) {
+                        return new OperationResult(false,
+                            "Invalid dynamic parameter on line " + (index + 1) + ": " + e.getMessage());
+                    }
+                    anyDynamicStorage = true;
+                    continue;
+                }
+
+                customStorageRequested = true;
+                anyExplicitStorage = true;
+
+                if (storageSpec.equalsIgnoreCase("existing") || storageSpec.equalsIgnoreCase("preserve")) {
+                    if (index >= existingParameters.length) {
+                        return new OperationResult(false,
+                            "parameter line " + (index + 1)
+                                + " requested existing storage but no current parameter exists at that index");
+                    }
+                    try {
+                        replacementParameters.add(new ParameterImpl(
+                            requestedName,
+                            resolvedParamType,
+                            existingParameters[index].getVariableStorage(),
+                            program,
+                            SourceType.USER_DEFINED));
+                    } catch (InvalidInputException e) {
+                        return new OperationResult(false,
+                            "Invalid preserved parameter storage on line " + (index + 1) + ": " + e.getMessage());
+                    }
+                    continue;
+                }
+
+                VariableStorage variableStorage;
+                try {
+                    variableStorage = parseVariableStorageSpec(program, storageSpec, resolvedParamType.getLength());
+                } catch (InvalidInputException e) {
+                    return new OperationResult(false,
+                        "Invalid parameter storage on line " + (index + 1) + ": " + e.getMessage());
+                }
+
+                try {
+                    replacementParameters.add(new ParameterImpl(
+                        requestedName,
+                        resolvedParamType,
+                        variableStorage,
+                        program,
+                        SourceType.USER_DEFINED));
+                } catch (InvalidInputException e) {
+                    return new OperationResult(false,
+                        "Invalid explicit parameter storage on line " + (index + 1) + ": " + e.getMessage());
+                }
+            }
+
+            if (anyExplicitStorage && anyDynamicStorage) {
+                return new OperationResult(false,
+                    "parameters cannot mix explicit storage with dynamic storage in one request; use explicit storage or preserve for every parameter line");
+            }
+            if (anyExplicitStorage) {
+                updateType = Function.FunctionUpdateType.CUSTOM_STORAGE;
+            }
+        }
+
+        VariableStorage resolvedReturnStorage = null;
+        if (normalizedReturnStorage != null) {
+            if (normalizedReturnStorage.equalsIgnoreCase("existing")
+                || normalizedReturnStorage.equalsIgnoreCase("preserve")) {
+                resolvedReturnStorage = function.getReturn().getVariableStorage();
+            } else if (normalizedReturnStorage.equalsIgnoreCase("void")) {
+                resolvedReturnStorage = VariableStorage.VOID_STORAGE;
+            } else {
+                try {
+                    resolvedReturnStorage = parseVariableStorageSpec(program,
+                        normalizedReturnStorage,
+                        resolvedReturnType.getLength());
+                } catch (InvalidInputException e) {
+                    return new OperationResult(false, "Invalid return_storage: " + e.getMessage());
+                }
+            }
+            if (!resolvedReturnStorage.isVoidStorage() && !resolvedReturnStorage.isUnassignedStorage()) {
+                customStorageRequested = true;
+            }
+        }
+
+        String signatureBefore = function.getPrototypeString(true, true);
+        String returnBefore = describeVariableStorage(function.getReturn().getVariableStorage());
+
+        if (dryRun) {
+            return new OperationResult(true,
+                buildStorageAwarePrototypeResponse(
+                    function,
+                    signatureBefore,
+                    signatureBefore,
+                    returnBefore,
+                    describeVariableStorage(resolvedReturnStorage == null
+                        ? function.getReturn().getVariableStorage()
+                        : resolvedReturnStorage),
+                    replacementParameters == null ? function.getParameters().length : replacementParameters.size(),
+                    updateType,
+                    normalizedCallingConvention,
+                    hasVarargsSpecified ? Boolean.valueOf(hasVarargs) : null,
+                    true,
+                    detectHiddenReturnPointerWarnings(function, replacementParameters, resolvedReturnStorage)));
+        }
+
+        try {
+            if (normalizedCallingConvention != null) {
+                try {
+                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, true));
+                } catch (InvalidInputException firstError) {
+                    function.setCallingConvention(normalizeLegacyCallingConventions(normalizedCallingConvention, false));
+                }
+            }
+
+            if (replacementParameters != null) {
+                String conventionName = function.getCallingConventionName();
+                if (conventionName == null || conventionName.isBlank()) {
+                    conventionName = Function.UNKNOWN_CALLING_CONVENTION_STRING;
+                }
+
+                Variable returnVariable = resolvedReturnStorage == null
+                    ? new ReturnParameterImpl(resolvedReturnType, program)
+                    : new ReturnParameterImpl(resolvedReturnType, resolvedReturnStorage, customStorageRequested, program);
+
+                function.updateFunction(
+                    conventionName,
+                    returnVariable,
+                    replacementParameters,
+                    customStorageRequested ? Function.FunctionUpdateType.CUSTOM_STORAGE : updateType,
+                    true,
+                    SourceType.USER_DEFINED);
+            } else if (resolvedReturnStorage != null) {
+                function.setReturn(resolvedReturnType, resolvedReturnStorage, SourceType.USER_DEFINED);
+            } else if (normalizedReturnType != null) {
+                function.setReturnType(resolvedReturnType, SourceType.USER_DEFINED);
+            }
+
+            if (hasVarargsSpecified) {
+                function.setVarArgs(hasVarargs);
+            }
+        } catch (DuplicateNameException | InvalidInputException e) {
+            return new OperationResult(false, "Failed to apply storage-aware prototype: " + e.getMessage());
+        }
+
+        String signatureAfter = function.getPrototypeString(true, true);
+        String returnAfter = describeVariableStorage(function.getReturn().getVariableStorage());
+        return new OperationResult(true,
+            buildStorageAwarePrototypeResponse(
+                function,
+                signatureBefore,
+                signatureAfter,
+                returnBefore,
+                returnAfter,
+                function.getParameters().length,
+                customStorageRequested ? Function.FunctionUpdateType.CUSTOM_STORAGE : updateType,
+                normalizedCallingConvention,
+                hasVarargsSpecified ? Boolean.valueOf(hasVarargs) : null,
+                false,
+                detectHiddenReturnPointerWarnings(function, replacementParameters, resolvedReturnStorage)));
+    }
+
+    private List<ParameterStorageSpec> parseParameterStorageSpecs(String parameters) {
+        if (parameters == null) {
+            return null;
+        }
+
+        List<ParameterStorageSpec> specs = new ArrayList<>();
+        for (String rawLine : parameters.split("\\r?\\n")) {
+            if (rawLine.isBlank()) {
+                continue;
+            }
+            String[] parts = rawLine.split("\\|", -1);
+            if (parts.length < 2 || parts.length > 3) {
+                throw new IllegalArgumentException(
+                    "Invalid parameters line: expected name|type|storage or name|type, got: " + rawLine);
+            }
+            String name = trimToNull(parts[0]);
+            String typeName = trimToNull(parts[1]);
+            String storageSpec = parts.length >= 3 ? trimToNull(parts[2]) : null;
+            specs.add(new ParameterStorageSpec(name, typeName, storageSpec));
+        }
+
+        return specs;
+    }
+
+    private VariableStorage parseVariableStorageSpec(Program program, String storageSpec, int typeLength)
+            throws InvalidInputException {
+        String normalized = normalizeWhitespace(storageSpec);
+        if (normalized.isBlank() || normalized.equalsIgnoreCase("unassigned")) {
+            return VariableStorage.UNASSIGNED_STORAGE;
+        }
+        if (normalized.equalsIgnoreCase("void")) {
+            return VariableStorage.VOID_STORAGE;
+        }
+
+        try {
+            return VariableStorage.deserialize(program, normalized);
+        } catch (InvalidInputException ignored) {
+            // Fall through to convenience formats below.
+        }
+
+        if (normalized.regionMatches(true, 0, "stack:", 0, 6)) {
+            String[] parts = normalized.split(":", 3);
+            if (parts.length < 3) {
+                throw new InvalidInputException("stack storage must use stack:offset:size");
+            }
+            int offset = Integer.decode(parts[1]);
+            int size = Integer.decode(parts[2]);
+            return new VariableStorage(program, offset, size);
+        }
+
+        String registerSpec = normalized;
+        if (registerSpec.regionMatches(true, 0, "reg:", 0, 4)) {
+            registerSpec = registerSpec.substring(4).trim();
+        }
+        registerSpec = registerSpec.replace(",", ":");
+        String[] registerNames = registerSpec.split(":");
+        List<ghidra.program.model.lang.Register> registers = new ArrayList<>();
+        for (String rawName : registerNames) {
+            String registerName = trimToNull(rawName);
+            if (registerName == null) {
+                continue;
+            }
+            ghidra.program.model.lang.Register register = program.getRegister(registerName);
+            if (register == null) {
+                throw new InvalidInputException("Unknown storage token: " + storageSpec);
+            }
+            registers.add(register);
+        }
+        if (!registers.isEmpty()) {
+            return new VariableStorage(program,
+                registers.toArray(new ghidra.program.model.lang.Register[0]));
+        }
+
+        throw new InvalidInputException("Unsupported storage specification: " + storageSpec
+            + " (use existing, dynamic, stack:offset:size, reg:AX, or raw Ghidra serialization)");
+    }
+
+    private String describeVariableStorage(VariableStorage storage) {
+        if (storage == null) {
+            return "<none>";
+        }
+        if (storage.isVoidStorage()) {
+            return "void";
+        }
+        if (storage.isUnassignedStorage()) {
+            return "unassigned";
+        }
+        return safeValueForResponse(storage.toString())
+            + "\tserialization=" + safeValueForResponse(storage.getSerializationString());
+    }
+
+    private List<String> detectHiddenReturnPointerWarnings(Function function,
+                                                           List<Variable> replacementParameters,
+                                                           VariableStorage requestedReturnStorage) {
+        List<String> warnings = new ArrayList<>();
+        Parameter[] currentParameters = function.getParameters();
+        for (Parameter parameter : currentParameters) {
+            if (parameter != null && Function.RETURN_PTR_PARAM_NAME.equals(parameter.getName())) {
+                warnings.add("warning=hidden_return_storage_ptr_present\tparameter_storage="
+                    + safeValueForResponse(describeVariableStorage(parameter.getVariableStorage())));
+            }
+        }
+
+        if (requestedReturnStorage == null && replacementParameters != null && function.hasCustomVariableStorage()) {
+            warnings.add("warning=custom_storage_without_explicit_return_storage\tdetail=verify the decompiler did not reintroduce "
+                + Function.RETURN_PTR_PARAM_NAME);
+        }
+        return warnings;
+    }
+
+    private String buildStorageAwarePrototypeResponse(Function function, String signatureBefore,
+                                                      String signatureAfter, String returnBefore,
+                                                      String returnAfter, int parameterCount,
+                                                      Function.FunctionUpdateType updateType,
+                                                      String requestedCallingConvention,
+                                                      Boolean hasVarargs, boolean dryRun,
+                                                      List<String> warnings) {
+        StringBuilder out = new StringBuilder();
+        out.append("status=").append(dryRun ? "dry_run" : "ok")
+            .append("\noperation=set_function_prototype_storage")
+            .append("\nfunction_address=").append(function.getEntryPoint())
+            .append("\nfunction_name=").append(safeValueForResponse(function.getName()))
+            .append("\nsignature_before=").append(safeValueForResponse(signatureBefore))
+            .append("\nsignature_after=").append(safeValueForResponse(signatureAfter))
+            .append("\nreturn_storage_before=").append(returnBefore)
+            .append("\nreturn_storage_after=").append(returnAfter)
+            .append("\nparameter_count=").append(parameterCount)
+            .append("\ncustom_storage=").append(function.hasCustomVariableStorage())
+            .append("\nupdate_type=").append(updateType)
+            .append("\ncalling_convention=").append(safeValueForResponse(function.getCallingConventionName()));
+        if (requestedCallingConvention != null) {
+            out.append("\nrequested_calling_convention=")
+                .append(safeValueForResponse(requestedCallingConvention));
+        }
+        if (hasVarargs != null) {
+            out.append("\nhas_varargs=").append(hasVarargs);
+        }
+        if (!warnings.isEmpty()) {
+            out.append("\n").append(String.join("\n", warnings));
+        }
+        return out.toString();
     }
 
     /**
@@ -4717,7 +5240,7 @@ public class GhidraMCPPlugin extends Plugin {
 
     private String listProjectPrograms(String projectDir, String projectName,
                                        String folderPath, boolean recursive) {
-        String resolvedProjectDir = trimToNull(projectDir);
+        String resolvedProjectDir = normalizeProjectDir(projectDir);
         String resolvedProjectName = trimToNull(projectName);
         String resolvedFolderPath = normalizeFolderPath(folderPath);
 
@@ -4727,7 +5250,7 @@ public class GhidraMCPPlugin extends Plugin {
                 currentProgram.getDomainFile().getProjectLocator() != null) {
                 ghidra.framework.model.ProjectLocator locator = currentProgram.getDomainFile().getProjectLocator();
                 if (resolvedProjectDir == null) {
-                    resolvedProjectDir = locator.getLocation();
+                    resolvedProjectDir = normalizeProjectDir(locator.getLocation());
                 }
                 if (resolvedProjectName == null) {
                     resolvedProjectName = locator.getName();
